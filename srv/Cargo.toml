@@ -1,0 +1,36 @@
+[package]
+name = "loopd"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tokio = { version = "*", features = ["full"] }
+jsonwebtoken = "9"
+diesel = { version = "*", features = ["uuid"] }
+diesel-async = { version = "*", features = ["postgres", "deadpool"] }
+anyhow = { version = "*" }
+uuid = { version = "*", features = ["v7"] }
+thiserror = { version = "*" }
+deadpool = "*"
+serde = { version = "*", features = ["derive"] }
+serde_json = { version = "*" }
+bcrypt = "*"
+tracing = { version = "*" }
+axum = { version = "*", features = ["macros"] }
+toml = { version = "*" }
+tracing-subscriber = { version = "*", features = ["env-filter"] }
+tracing-appender = { version = "*" }
+redis = "*"
+deadpool-redis = "*"
+rand = "*"
+lettre = { version = "*", default-features = false, features = ["rustls-tls", "builder", "smtp-transport"] }
+http = "*"
+tower-http = { version = "*", features = ["cors"] }
+sha2 = "*"
+hex = "*"
+futures-util = "*"
+dashmap = "*"
+tokio-stream = "*"
+tower-cookies = "*"
+time = "*"
+base64 = "*"
