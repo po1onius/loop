@@ -1,10 +1,19 @@
 use std::sync::Arc;
 
 use axum::{Json, extract::State};
+use bcrypt::verify;
+use http::StatusCode;
+use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
+use loop_svc_model::user::User;
 use serde::{Deserialize, Serialize};
+use srv_common::{
+    db_conn,
+    http::{ExceptionHandle, HttpErr, InnerExceptionHandle},
+    utils,
+};
 use time::OffsetDateTime;
 
-use crate::http::{ApiError, AppState};
+use crate::{config::CONFIG, http::AppState};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Claims {
@@ -33,23 +42,32 @@ struct RefreshReq {
     refresh_token: String,
 }
 
-async fn login(
-    State(state): State<Arc<AppState>>,
+pub async fn login(
+    State(state): State<AppState>,
     Json(req): Json<LoginReq>,
-) -> Result<Json<TokenPairResp>, ApiError> {
-    let row: Option<(String, String, String)> =
-        sqlx::query_as("SELECT id, email, password_hash FROM users WHERE email = ?")
-            .bind(&req.email)
-            .fetch_optional(&state.db)
-            .await
-            .map_err(|_| ApiError::Internal)?;
+) -> Result<Json<TokenPairResp>, HttpErr> {
+    let cur_user = User::select_by_account(&req.account, &mut db_conn!())
+        .await
+        .ieh()?
+        .eh(StatusCode::BAD_REQUEST, "user not exist")?;
 
-    let (user_id, email, password_hash) = row.ok_or(ApiError::Unauthorized)?;
+    verify(&req.password, &cur_user.pwd)
+        .ieh()?
+        .then_some(())
+        .eh(StatusCode::BAD_REQUEST, "password error")?;
 
-    // 生产：校验 argon2/bcrypt hash；这里示例用明文
-    if req.password != password_hash {
-        return Err(ApiError::Unauthorized);
-    }
+    let exp = utils::time_tool::cur_ts().ieh()? as usize + CONFIG.jwt_expire_duration;
+    let claims = Claims {
+        exp,
+        user_id: cur_user.user_id,
+    };
+
+    let token = encode(
+        &Header::new(Algorithm::RS256),
+        &claims,
+        &EncodingKey::from_rsa_pem(CONFIG.crypto.jwt_rsa_pri_key.as_bytes()).ieh()?,
+    )
+    .ieh()?;
 
     let (access_token, access_exp) = mint_access_token(&state, &user_id)?;
     let (refresh_token, refresh_exp) = mint_refresh_token(&state, &user_id).await?;
@@ -62,7 +80,7 @@ async fn login(
     }))
 }
 
-async fn refresh(
+pub async fn refresh(
     State(state): State<Arc<AppState>>,
     Json(req): Json<RefreshReq>,
 ) -> Result<Json<TokenPairResp>, ApiError> {
@@ -111,35 +129,6 @@ async fn refresh(
         refresh_token: new_refresh_token,
         refresh_expires_in: refresh_exp,
     }))
-}
-
-async fn me(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-) -> Result<Json<MeResp>, ApiError> {
-    let auth = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .ok_or(ApiError::Unauthorized)?;
-
-    let token = auth.strip_prefix("Bearer ").ok_or(ApiError::Unauthorized)?;
-
-    let claims = jsonwebtoken::decode::<Claims>(token, &state.jwt_dec, &Validation::default())
-        .map_err(|_| ApiError::Unauthorized)?
-        .claims;
-
-    if claims.iss != state.jwt_issuer {
-        return Err(ApiError::Unauthorized);
-    }
-
-    let row: Option<(String, String)> = sqlx::query_as("SELECT id, email FROM users WHERE id = ?")
-        .bind(&claims.sub)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(|_| ApiError::Internal)?;
-
-    let (id, email) = row.ok_or(ApiError::Unauthorized)?;
-    Ok(Json(MeResp { user_id: id, email }))
 }
 
 fn mint_access_token(state: &AppState, user_id: &str) -> Result<(String, i64), ApiError> {
