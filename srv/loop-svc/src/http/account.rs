@@ -1,51 +1,30 @@
 use std::sync::Arc;
 
+use crate::{
+    config::CONFIG,
+    http::{AppState, Claims},
+};
 use axum::{Json, extract::State};
+use base64::Engine;
 use bcrypt::verify;
 use http::StatusCode;
-use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
+use jsonwebtoken::{Algorithm, Header, encode};
+use loop_dto::{LoginRequest, LoginResp};
 use loop_svc_model::user::User;
-use serde::{Deserialize, Serialize};
+use rand::{Rng, rngs::ThreadRng};
+use sha2::{Digest, Sha256};
 use srv_common::{
     db_conn,
     http::{ExceptionHandle, HttpErr, InnerExceptionHandle},
     utils,
 };
 use time::OffsetDateTime;
-
-use crate::{config::CONFIG, http::AppState};
-
-#[derive(Debug, Serialize, Deserialize)]
-struct Claims {
-    sub: String, // user_id
-    iss: String,
-    exp: i64,
-    iat: i64,
-}
-
-#[derive(Debug, Deserialize)]
-struct LoginReq {
-    email: String,
-    password: String,
-}
-
-#[derive(Debug, Serialize)]
-struct TokenPairResp {
-    access_token: String,
-    expires_in: i64,
-    refresh_token: String,
-    refresh_expires_in: i64,
-}
-
-#[derive(Debug, Deserialize)]
-struct RefreshReq {
-    refresh_token: String,
-}
+use uuid::Uuid;
 
 pub async fn login(
     State(state): State<AppState>,
-    Json(req): Json<LoginReq>,
-) -> Result<Json<TokenPairResp>, HttpErr> {
+    Json(req): Json<LoginRequest>,
+) -> Result<Json<LoginResp>, HttpErr> {
     let cur_user = User::select_by_account(&req.account, &mut db_conn!())
         .await
         .ieh()?
@@ -56,23 +35,10 @@ pub async fn login(
         .then_some(())
         .eh(StatusCode::BAD_REQUEST, "password error")?;
 
-    let exp = utils::time_tool::cur_ts().ieh()? as usize + CONFIG.jwt_expire_duration;
-    let claims = Claims {
-        exp,
-        user_id: cur_user.user_id,
-    };
+    let (access_token, access_exp) = mint_access_token(&state, cur_user.user_id)?;
+    let (refresh_token, refresh_exp) = mint_refresh_token(&state, cur_user.user_id).await?;
 
-    let token = encode(
-        &Header::new(Algorithm::RS256),
-        &claims,
-        &EncodingKey::from_rsa_pem(CONFIG.crypto.jwt_rsa_pri_key.as_bytes()).ieh()?,
-    )
-    .ieh()?;
-
-    let (access_token, access_exp) = mint_access_token(&state, &user_id)?;
-    let (refresh_token, refresh_exp) = mint_refresh_token(&state, &user_id).await?;
-
-    Ok(Json(TokenPairResp {
+    Ok(Json(LoginResp {
         access_token,
         expires_in: access_exp,
         refresh_token,
@@ -82,8 +48,8 @@ pub async fn login(
 
 pub async fn refresh(
     State(state): State<Arc<AppState>>,
-    Json(req): Json<RefreshReq>,
-) -> Result<Json<TokenPairResp>, ApiError> {
+    Json(req): Json<LoginResp>,
+) -> Result<Json<LoginResp>, HttpErr> {
     let now = OffsetDateTime::now_utc().unix_timestamp();
 
     // 1) 查 refresh token hash 是否存在且有效
@@ -123,7 +89,7 @@ pub async fn refresh(
     let (access_token, access_exp) = mint_access_token(&state, &user_id)?;
     let (new_refresh_token, refresh_exp) = mint_refresh_token(&state, &user_id).await?;
 
-    Ok(Json(TokenPairResp {
+    Ok(Json(LoginResp {
         access_token,
         expires_in: access_exp,
         refresh_token: new_refresh_token,
@@ -131,31 +97,27 @@ pub async fn refresh(
     }))
 }
 
-fn mint_access_token(state: &AppState, user_id: &str) -> Result<(String, i64), ApiError> {
-    let now = OffsetDateTime::now_utc();
-    let exp = now + state.access_ttl;
-
+fn mint_access_token(state: &AppState, user_id: Uuid) -> Result<(String, usize), HttpErr> {
+    let exp = utils::time_tool::cur_ts().ieh()? as usize + CONFIG.access_ttl;
     let claims = Claims {
-        sub: user_id.to_string(),
-        iss: state.jwt_issuer.clone(),
-        iat: now.unix_timestamp(),
-        exp: exp.unix_timestamp(),
+        exp,
+        user_id,
+        perm_ver: 1,
+        perms: vec![1],
     };
 
-    let token = jsonwebtoken::encode(&Header::default(), &claims, &state.jwt_enc)
-        .map_err(|_| ApiError::Internal)?;
+    let token = encode(&Header::new(Algorithm::RS256), &claims, &state.jwt_enc).ieh()?;
 
-    Ok((token, state.access_ttl.whole_seconds()))
+    Ok((token, CONFIG.access_ttl))
 }
 
-async fn mint_refresh_token(state: &AppState, user_id: &str) -> Result<(String, i64), ApiError> {
-    let now = OffsetDateTime::now_utc();
-    let exp = now + state.refresh_ttl;
+async fn mint_refresh_token(state: &AppState, user_id: Uuid) -> Result<(String, usize), HttpErr> {
+    let exp = utils::time_tool::cur_ts().ieh()? as usize + CONFIG.refresh_ttl;
 
     let raw = generate_refresh_token();
     let token_hash = hash_refresh_token(&raw);
 
-    let id = Uuid::new_v4().to_string();
+    let id = Uuid::now_v7().to_string();
 
     sqlx::query(
         r#"
@@ -179,14 +141,13 @@ async fn mint_refresh_token(state: &AppState, user_id: &str) -> Result<(String, 
 }
 
 fn generate_refresh_token() -> String {
-    // 32 bytes -> base64url 无 padding，长度约 43-44 字符
     let mut buf = [0u8; 32];
-    fill_bytes(&mut buf);
+    let mut rng = ThreadRng::default();
+    rng.fill_bytes(&mut buf);
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(buf)
 }
 
 fn hash_refresh_token(token: &str) -> String {
-    // 生产可以做：SHA256(pepper + token)，pepper 从 env 来
     let mut hasher = Sha256::new();
     hasher.update(token.as_bytes());
     let out = hasher.finalize();

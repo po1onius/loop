@@ -1,0 +1,9 @@
+[package]
+name = "loop-dto"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serde = { version = "*", features = ["derive"] }
+uuid = { version = "*", features = ["v7", "serde"] }
+ts-rs = { version = "*", features = ["uuid-impl"] }

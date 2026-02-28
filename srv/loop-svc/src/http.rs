@@ -1,13 +1,23 @@
 pub mod account;
 
-use axum::{Router, routing::post};
-use jsonwebtoken::{DecodingKey, EncodingKey};
-use std::sync::Arc;
-
 use crate::{
     config::CONFIG,
     http::account::{login, refresh},
 };
+use axum::{Router, routing::post};
+use jsonwebtoken::{DecodingKey, EncodingKey};
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use uuid::Uuid;
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Claims {
+    pub exp: usize,
+
+    pub user_id: Uuid,
+    pub perm_ver: u32,
+    pub perms: Vec<u32>,
+}
 
 pub struct AppState {
     pub jwt_enc: EncodingKey,

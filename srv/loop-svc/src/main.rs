@@ -1,11 +1,12 @@
 mod config;
 mod http;
+mod infra;
 mod model;
 
 use serde::Serialize;
 use srv_common::{http::http_serve, infra::init_db};
 
-use crate::http::route;
+use crate::{http::route, infra::init_nacos};
 
 #[derive(Debug, Serialize)]
 struct MeResp {
@@ -16,6 +17,7 @@ struct MeResp {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     init_db("");
+    init_nacos().await?;
 
     let app = route();
 

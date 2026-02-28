@@ -16,9 +16,9 @@ jsonwebtoken = "9"
 diesel = { version = "*", features = ["uuid"] }
 diesel-async = { version = "*", features = ["postgres", "deadpool"] }
 anyhow = { version = "*" }
-uuid = { version = "*", features = ["v7"] }
+uuid = { version = "*", features = ["v7", "serde"] }
 thiserror = { version = "*" }
-deadpool = "*"
+deadpool = { version = "0.12.3" }
 serde = { version = "*", features = ["derive"] }
 serde_json = { version = "*" }
 bcrypt = "*"
@@ -29,7 +29,7 @@ tracing-subscriber = { version = "*", features = ["env-filter"] }
 tracing-appender = { version = "*" }
 redis = "*"
 deadpool-redis = "*"
-rand = "*"
+rand = { version = "*", features = ["thread_rng"] }
 lettre = { version = "*", default-features = false, features = ["rustls-tls", "builder", "smtp-transport"] }
 http = "*"
 tower-http = { version = "*", features = ["cors"] }
@@ -42,6 +42,9 @@ tower-cookies = "*"
 srv-common = { git = "ssh://git@github.com/po1onius/imitv.git" }
 loop-svc-model = { path = "loop-svc-model" }
 time = "*"
+loop-dto = { path = "../loop-dto" }
+nacos-sdk = "*"
+base64 = "*"
 
 
 [profile.release]
