@@ -1,7 +1,6 @@
 mod config;
 mod http;
 mod infra;
-mod model;
 
 use serde::Serialize;
 use srv_common::{http::http_serve, infra::init_db};
@@ -21,6 +20,6 @@ async fn main() -> anyhow::Result<()> {
 
     let app = route();
 
-    http_serve(app, 3000);
+    http_serve(app, 3000).await;
     Ok(())
 }

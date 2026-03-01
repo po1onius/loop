@@ -33,6 +33,8 @@ dashmap = { workspace = true }
 tokio-stream = { workspace = true }
 tower-cookies = { workspace = true }
 srv-common = { workspace = true }
+chrono = { workspace = true }
+ipnet = { workspace = true }
 
 [dev-dependencies]
 eventsource-stream = "0.2"

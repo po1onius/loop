@@ -1,4 +1,4 @@
-pub mod user;
+pub mod account;
 
 use deadpool::managed::Object;
 use diesel_async::{AsyncPgConnection, pooled_connection::AsyncDieselConnectionManager};

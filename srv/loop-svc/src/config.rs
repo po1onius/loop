@@ -10,8 +10,8 @@ pub struct Crypto {
 #[derive(Serialize, Deserialize)]
 pub struct Config {
     pub crypto: Crypto,
-    pub access_ttl: usize,
-    pub refresh_ttl: usize,
+    pub access_ttl: i64,
+    pub refresh_ttl: i64,
 
     pub pg_conn: String,
     pub redis_conn: String,

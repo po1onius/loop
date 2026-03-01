@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use crate::{
     config::CONFIG,
     http::{AppState, Claims},
@@ -7,19 +5,18 @@ use crate::{
 use axum::{Json, extract::State};
 use base64::Engine;
 use bcrypt::verify;
+use chrono::{Duration, Utc};
 use http::StatusCode;
 use jsonwebtoken::{Algorithm, Header, encode};
 use loop_dto::{LoginRequest, LoginResp};
-use loop_svc_model::user::User;
+use loop_svc_model::account::{NewRefreshTokens, RefreshTokens, User};
 use rand::{Rng, rngs::ThreadRng};
 use sha2::{Digest, Sha256};
 use srv_common::{
     db_conn,
     http::{ExceptionHandle, HttpErr, InnerExceptionHandle},
-    utils,
 };
-use time::OffsetDateTime;
-use uuid::Uuid;
+use std::sync::Arc;
 
 pub async fn login(
     State(state): State<AppState>,
@@ -47,47 +44,29 @@ pub async fn login(
 }
 
 pub async fn refresh(
-    State(state): State<Arc<AppState>>,
+    State(state): State<AppState>,
     Json(req): Json<LoginResp>,
 ) -> Result<Json<LoginResp>, HttpErr> {
-    let now = OffsetDateTime::now_utc().unix_timestamp();
-
-    // 1) 查 refresh token hash 是否存在且有效
+    let now = Utc::now();
     let token_hash = hash_refresh_token(&req.refresh_token);
 
-    let row: Option<(String, String, i64, Option<i64>, Option<i64>)> = sqlx::query_as(
-        r#"
-        SELECT id, user_id, expires_at, revoked_at, used_at
-        FROM refresh_tokens
-        WHERE token_hash = ?
-        "#,
-    )
-    .bind(&token_hash)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|_| ApiError::Internal)?;
-
-    let (rt_id, user_id, expires_at, revoked_at, used_at) = row.ok_or(ApiError::Unauthorized)?;
-
-    if expires_at <= now {
-        return Err(ApiError::Unauthorized);
-    }
-    if revoked_at.is_some() || used_at.is_some() {
-        // rotation 防重放：旧 token 不能再用
-        return Err(ApiError::Unauthorized);
-    }
-
-    // 2) 标记旧 refresh token 已用（used_at）
-    sqlx::query("UPDATE refresh_tokens SET used_at = ? WHERE id = ?")
-        .bind(now)
-        .bind(&rt_id)
-        .execute(&state.db)
+    let row = RefreshTokens::select_by_token_hash(&token_hash, &mut db_conn!())
         .await
-        .map_err(|_| ApiError::Internal)?;
+        .ieh()?
+        .eh(StatusCode::BAD_REQUEST, "")?;
+
+    if row.expires_at <= now || row.revoked_at.is_some() {
+        return Err(HttpErr::ClientErr(
+            StatusCode::UNAUTHORIZED,
+            "refresh token expction".to_string(),
+        ));
+    }
+
+    RefreshTokens::expire(row.id, &mut db_conn!()).await.ieh()?;
 
     // 3) 颁发新的 access + refresh（refresh rotation）
-    let (access_token, access_exp) = mint_access_token(&state, &user_id)?;
-    let (new_refresh_token, refresh_exp) = mint_refresh_token(&state, &user_id).await?;
+    let (access_token, access_exp) = mint_access_token(&state, row.user_id)?;
+    let (new_refresh_token, refresh_exp) = mint_refresh_token(&state, row.user_id).await?;
 
     Ok(Json(LoginResp {
         access_token,
@@ -97,11 +76,12 @@ pub async fn refresh(
     }))
 }
 
-fn mint_access_token(state: &AppState, user_id: Uuid) -> Result<(String, usize), HttpErr> {
-    let exp = utils::time_tool::cur_ts().ieh()? as usize + CONFIG.access_ttl;
+fn mint_access_token(state: &AppState, user_id: i64) -> Result<(String, i64), HttpErr> {
+    let exp = Utc::now().timestamp() + CONFIG.access_ttl;
     let claims = Claims {
-        exp,
+        exp: exp as usize,
         user_id,
+        // TODO
         perm_ver: 1,
         perms: vec![1],
     };
@@ -111,33 +91,24 @@ fn mint_access_token(state: &AppState, user_id: Uuid) -> Result<(String, usize),
     Ok((token, CONFIG.access_ttl))
 }
 
-async fn mint_refresh_token(state: &AppState, user_id: Uuid) -> Result<(String, usize), HttpErr> {
-    let exp = utils::time_tool::cur_ts().ieh()? as usize + CONFIG.refresh_ttl;
+async fn mint_refresh_token(state: &AppState, user_id: i64) -> Result<(String, i64), HttpErr> {
+    let ttl = Duration::seconds(CONFIG.refresh_ttl);
+    let expires_at = Utc::now() + ttl;
 
     let raw = generate_refresh_token();
     let token_hash = hash_refresh_token(&raw);
 
-    let id = Uuid::now_v7().to_string();
+    let new = NewRefreshTokens {
+        user_id,
+        token_hash: &token_hash,
+        device_id: None,
+        expires_at,
+        revoked_at: None,
+        ip_address: None,
+        user_agent: None,
+    };
 
-    sqlx::query(
-        r#"
-        INSERT INTO refresh_tokens (id, user_id, token_hash, expires_at, created_at)
-        VALUES (?, ?, ?, ?, ?)
-        "#,
-    )
-    .bind(&id)
-    .bind(user_id)
-    .bind(&token_hash)
-    .bind(exp.unix_timestamp())
-    .bind(now.unix_timestamp())
-    .execute(&state.db)
-    .await
-    .map_err(|e| {
-        warn!("insert refresh token failed: {e}");
-        ApiError::Internal
-    })?;
-
-    Ok((raw, state.refresh_ttl.whole_seconds()))
+    Ok((raw, CONFIG.refresh_ttl))
 }
 
 fn generate_refresh_token() -> String {

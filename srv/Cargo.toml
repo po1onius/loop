@@ -13,7 +13,7 @@ edition = "2024"
 [workspace.dependencies]
 tokio = { version = "*", features = ["full"] }
 jsonwebtoken = "9"
-diesel = { version = "*", features = ["uuid"] }
+diesel = { version = "*", features = ["uuid", "chrono", "ipnet-address"] }
 diesel-async = { version = "*", features = ["postgres", "deadpool"] }
 anyhow = { version = "*" }
 uuid = { version = "*", features = ["v7", "serde"] }
@@ -45,6 +45,8 @@ time = "*"
 loop-dto = { path = "../loop-dto" }
 nacos-sdk = "*"
 base64 = "*"
+chrono = { version = "*", features = ["serde"] }
+ipnet = "*"
 
 
 [profile.release]
