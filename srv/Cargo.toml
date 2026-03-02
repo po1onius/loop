@@ -47,6 +47,7 @@ nacos-sdk = "*"
 base64 = "*"
 chrono = { version = "*", features = ["serde"] }
 ipnet = "*"
+arc-swap = "*"
 
 
 [profile.release]

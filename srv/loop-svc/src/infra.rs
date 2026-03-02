@@ -1,6 +1,10 @@
+use std::sync::Arc;
+
 use nacos_sdk::api::config::{ConfigChangeListener, ConfigResponse, ConfigServiceBuilder};
 use nacos_sdk::api::constants;
 use nacos_sdk::api::props::ClientProps;
+
+use crate::config::CONFIG;
 
 pub async fn init_nacos() -> anyhow::Result<()> {
     let client_props = ClientProps::new()
@@ -42,5 +46,9 @@ struct SimpleConfigChangeListener;
 impl ConfigChangeListener for SimpleConfigChangeListener {
     fn notify(&self, config_resp: ConfigResponse) {
         tracing::info!("listen the config={}", config_resp);
+        CONFIG.rcu(|cfg| {
+            serde_json::from_str(&config_resp.content())
+                .map_or_else(|_| cfg.to_owned(), |v| Arc::new(v))
+        });
     }
 }

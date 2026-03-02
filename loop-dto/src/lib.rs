@@ -23,3 +23,9 @@ pub struct SetTokenRequest {
     pub user_id: String,
     pub num: i64,
 }
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "dto.ts")]
+pub struct RefreshTokenRequest {
+    pub refresh_token: String,
+}

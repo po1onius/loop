@@ -1,13 +1,14 @@
+use arc_swap::ArcSwap;
 use serde::{Deserialize, Serialize};
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Default)]
 pub struct Crypto {
     pub jwt_rsa_pri_key: String,
     pub jwt_rsa_pub_key: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Default)]
 pub struct Config {
     pub crypto: Crypto,
     pub access_ttl: i64,
@@ -17,10 +18,5 @@ pub struct Config {
     pub redis_conn: String,
 }
 
-pub static CONFIG: LazyLock<Config> = LazyLock::new(config_init);
-
-pub fn config_init() -> Config {
-    let cfg_path = "config.toml";
-    let config_str = std::fs::read_to_string(cfg_path).expect("read config error");
-    toml::from_str(config_str.as_str()).expect("load toml config error")
-}
+pub static CONFIG: LazyLock<ArcSwap<Config>> =
+    LazyLock::new(|| ArcSwap::new(Arc::new(Config::default())));

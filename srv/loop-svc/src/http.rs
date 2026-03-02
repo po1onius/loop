@@ -7,7 +7,6 @@ use crate::{
 use axum::{Router, routing::post};
 use jsonwebtoken::{DecodingKey, EncodingKey};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Claims {
@@ -26,8 +25,10 @@ pub struct AppState {
 
 pub fn route() -> Router {
     let state = AppState {
-        jwt_dec: DecodingKey::from_rsa_pem(CONFIG.crypto.jwt_rsa_pub_key.as_bytes()).unwrap(),
-        jwt_enc: EncodingKey::from_rsa_pem(CONFIG.crypto.jwt_rsa_pri_key.as_bytes()).unwrap(),
+        jwt_dec: DecodingKey::from_rsa_pem(CONFIG.load().crypto.jwt_rsa_pub_key.as_bytes())
+            .unwrap(),
+        jwt_enc: EncodingKey::from_rsa_pem(CONFIG.load().crypto.jwt_rsa_pri_key.as_bytes())
+            .unwrap(),
     };
     Router::new()
         .route("/login", post(login))

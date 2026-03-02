@@ -39,6 +39,7 @@ loop-dto = { workspace = true }
 nacos-sdk = { workspace = true }
 base64 = { workspace = true }
 chrono = { workspace = true }
+arc-swap = { workspace = true }
 
 [dev-dependencies]
 eventsource-stream = "0.2"

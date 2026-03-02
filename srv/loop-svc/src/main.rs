@@ -2,16 +2,8 @@ mod config;
 mod http;
 mod infra;
 
-use serde::Serialize;
-use srv_common::{http::http_serve, infra::init_db};
-
 use crate::{http::route, infra::init_nacos};
-
-#[derive(Debug, Serialize)]
-struct MeResp {
-    user_id: String,
-    email: String,
-}
+use srv_common::{http::http_serve, infra::init_db};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
