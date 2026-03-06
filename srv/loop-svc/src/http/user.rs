@@ -1,5 +1,5 @@
 use crate::{
-    config::CONFIG,
+    config::{CONFIG, ckp},
     http::{AppState, Claims},
 };
 use axum::{Json, extract::State};
@@ -9,17 +9,30 @@ use chrono::{Duration, Utc};
 use diesel_async::{AsyncConnection, scoped_futures::ScopedFutureExt};
 use http::StatusCode;
 use jsonwebtoken::{Algorithm, Header, encode};
-use loop_dto::{LoginRequest, LoginResp, RefreshTokenRequest};
+use loop_dto::{
+    LoginRequest, LoginResp, RefreshTokenRequest, RegisterRequest, VerifyCodeRequest,
+    VerifyCodeResp,
+};
 use loop_svc_model::{
     DieselConn,
     account::{NewRefreshTokens, RefreshTokens, User},
 };
 use rand::{Rng, rngs::ThreadRng};
+use redis::AsyncCommands;
 use sha2::{Digest, Sha256};
 use srv_common::{
     db_conn,
     http::{ExceptionHandle, HttpErr, InnerExceptionHandle},
+    redis_conn,
 };
+
+pub fn hex_encode(bytes: impl AsRef<[u8]>) -> String {
+    bytes
+        .as_ref()
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect()
+}
 
 pub async fn login(
     State(state): State<AppState>,
@@ -139,16 +152,17 @@ fn hash_refresh_token(token: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(token.as_bytes());
     let out = hasher.finalize();
-    hex::encode(out)
+    hex_encode(out)
 }
 
-// 用于 hex::encode
-mod hex {
-    pub fn encode(bytes: impl AsRef<[u8]>) -> String {
-        bytes
-            .as_ref()
-            .iter()
-            .map(|b| format!("{:02x}", b))
-            .collect()
-    }
+pub async fn register(
+    State(state): State<AppState>,
+    Json(req): Json<RegisterRequest>,
+) -> Result<(), HttpErr> {
+}
+
+pub async fn verify_code(
+    Json(req): Json<VerifyCodeRequest>,
+) -> Result<Json<VerifyCodeResp>, HttpErr> {
+    redis_conn!().get()
 }

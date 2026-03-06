@@ -9,6 +9,15 @@ pub struct Crypto {
 }
 
 #[derive(Serialize, Deserialize, Default)]
+pub struct SMTP {
+    pub jwt_rsa_pri_key: String,
+    pub jwt_rsa_pub_key: String,
+}
+
+#[derive(Serialize, Deserialize, Default)]
+pub struct SMS {}
+
+#[derive(Serialize, Deserialize, Default)]
 pub struct Config {
     pub crypto: Crypto,
     pub access_ttl: i64,
@@ -16,7 +25,15 @@ pub struct Config {
 
     pub pg_conn: String,
     pub redis_conn: String,
+
+    pub smtp: Option<SMTP>,
+    pub sms: Option<SMS>,
 }
 
 pub static CONFIG: LazyLock<ArcSwap<Config>> =
     LazyLock::new(|| ArcSwap::new(Arc::new(Config::default())));
+
+// Cache key prefix
+pub mod ckp {
+    pub const VERIFY_CODE: &str = "SMS";
+}

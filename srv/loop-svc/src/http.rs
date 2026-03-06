@@ -1,8 +1,8 @@
-pub mod account;
+pub mod user;
 
 use crate::{
     config::CONFIG,
-    http::account::{login, refresh},
+    http::user::{login, refresh},
 };
 use axum::{Router, routing::post};
 use jsonwebtoken::{DecodingKey, EncodingKey};
@@ -31,7 +31,7 @@ pub fn route() -> Router {
             .unwrap(),
     };
     Router::new()
-        .route("/login", post(login))
-        .route("/refresh", post(refresh))
+        .route("/user/login", post(login))
+        .route("/user/refresh_token", post(refresh))
         .with_state(state)
 }
