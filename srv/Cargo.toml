@@ -48,6 +48,7 @@ base64 = "*"
 chrono = { version = "*", features = ["serde"] }
 ipnet = "*"
 arc-swap = "*"
+paste = "*"
 
 
 [profile.release]

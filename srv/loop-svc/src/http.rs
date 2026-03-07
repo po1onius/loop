@@ -1,4 +1,5 @@
 pub mod user;
+mod util;
 
 use crate::{
     config::CONFIG,
@@ -14,7 +15,14 @@ struct Claims {
 
     pub user_id: i64,
     pub perm_ver: u32,
-    pub perms: Vec<u32>,
+    pub role: String,
+    pub patch_perm: PatchPerm,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct PatchPerm {
+    pub ban: Vec<String>,
+    pub ext: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -30,8 +38,10 @@ pub fn route() -> Router {
         jwt_enc: EncodingKey::from_rsa_pem(CONFIG.load().crypto.jwt_rsa_pri_key.as_bytes())
             .unwrap(),
     };
-    Router::new()
-        .route("/user/login", post(login))
-        .route("/user/refresh_token", post(refresh))
-        .with_state(state)
+    Router::new().merge(user::route(state))
+}
+
+pub mod err_key {
+    pub const TMR: &str = "too_many_requests";
+    pub const RTE: &str = "refresh_token_expction";
 }

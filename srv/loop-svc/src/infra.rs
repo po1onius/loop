@@ -1,3 +1,5 @@
+pub mod notify;
+
 use std::sync::Arc;
 
 use nacos_sdk::api::config::{
@@ -40,6 +42,7 @@ pub async fn nacos_run() -> ConfigService {
         )
         .await
         .unwrap();
+
     tracing::info!("listening the config success");
     config_service
 }

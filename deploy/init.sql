@@ -2,9 +2,10 @@
 
 create table users (
     user_id BIGSERIAL PRIMARY KEY,
-    username VARCHAR(100) NOT NULL,
-    account VARCHAR(100) UNIQUE NOT NULL,
-    pwd VARCHAR(60) NOT NULL
+    username TEXT NOT NULL,
+    account TEXT UNIQUE NOT NULL,
+    pwd TEXT NOT NULL,
+    role TEXT NOT NULL
 );
 
 CREATE TABLE refresh_tokens (
@@ -14,10 +15,10 @@ CREATE TABLE refresh_tokens (
     device_id TEXT,
     expires_at TIMESTAMPTZ NOT NULL,
     revoked_at TIMESTAMPTZ,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 
     ip_address INET,
-    user_agent TEXT,
+    user_agent TEXT
 );
 -- 用户查询（查某用户所有token）
 CREATE INDEX idx_refresh_tokens_user_id

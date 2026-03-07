@@ -1,8 +1,12 @@
 use crate::{
-    config::{CONFIG, ckp},
-    http::{AppState, Claims},
+    config::CONFIG,
+    http::{
+        AppState, Claims,
+        err_key::{RTE, TMR},
+        util::{ckb_vc, generate_code, hex_encode},
+    },
 };
-use axum::{Json, extract::State};
+use axum::{Json, Router, extract::State, routing::post};
 use base64::Engine;
 use bcrypt::verify;
 use chrono::{Duration, Utc};
@@ -26,14 +30,6 @@ use srv_common::{
     redis_conn,
 };
 
-pub fn hex_encode(bytes: impl AsRef<[u8]>) -> String {
-    bytes
-        .as_ref()
-        .iter()
-        .map(|b| format!("{:02x}", b))
-        .collect()
-}
-
 pub async fn login(
     State(state): State<AppState>,
     Json(req): Json<LoginRequest>,
@@ -51,14 +47,13 @@ pub async fn login(
                     .then_some(())
                     .eh(StatusCode::BAD_REQUEST, "password error")?;
 
-                let (access_token, access_exp) = mint_access_token(&state, cur_user.user_id)?;
+                let (access_token, access_exp) = mint_access_token(&state, &cur_user)?;
                 let (refresh_token, refresh_exp) =
                     mint_refresh_token(cur_user.user_id, conn).await?;
                 Ok(Json(LoginResp {
                     access_token,
                     expires_in: access_exp,
                     refresh_token,
-                    refresh_expires_in: refresh_exp,
                 }))
             }
             .scope_boxed()
@@ -83,20 +78,19 @@ pub async fn refresh(
                 if row.expires_at <= now || row.revoked_at.is_some() {
                     return Err(HttpErr::ClientErr(
                         StatusCode::UNAUTHORIZED,
-                        "refresh token expction".to_string(),
+                        RTE.to_string(),
                     ));
                 }
 
                 RefreshTokens::expire(row.id, conn).await.ieh()?;
 
-                let (access_token, access_exp) = mint_access_token(&state, row.user_id)?;
+                let (access_token, access_exp) = mint_access_token(&state, &row)?;
                 let (new_refresh_token, refresh_exp) =
                     mint_refresh_token(row.user_id, conn).await?;
                 Ok(Json(LoginResp {
                     access_token,
                     expires_in: access_exp,
                     refresh_token: new_refresh_token,
-                    refresh_expires_in: refresh_exp,
                 }))
             }
             .scope_boxed()
@@ -104,14 +98,15 @@ pub async fn refresh(
         .await
 }
 
-fn mint_access_token(state: &AppState, user_id: i64) -> Result<(String, i64), HttpErr> {
+fn mint_access_token(state: &AppState, user: &User) -> Result<(String, i64), HttpErr> {
     let exp = Utc::now().timestamp() + CONFIG.load().access_ttl;
     let claims = Claims {
         exp: exp as usize,
-        user_id,
-        // TODO
-        perm_ver: 1,
-        perms: vec![1],
+        user_id: user.user_id,
+
+        perm_ver: CONFIG.load().perm.perm_ver,
+        role: user.role,
+        ..Default
     };
 
     let token = encode(&Header::new(Algorithm::RS256), &claims, &state.jwt_enc).ieh()?;
@@ -156,13 +151,34 @@ fn hash_refresh_token(token: &str) -> String {
 }
 
 pub async fn register(
-    State(state): State<AppState>,
+    //State(state): State<AppState>,
     Json(req): Json<RegisterRequest>,
 ) -> Result<(), HttpErr> {
+    Ok(())
 }
 
 pub async fn verify_code(
     Json(req): Json<VerifyCodeRequest>,
 ) -> Result<Json<VerifyCodeResp>, HttpErr> {
-    redis_conn!().get()
+    let vck = ckb_vc(req.account);
+    let vc: Option<String> = redis_conn!().get(&vck).await.ieh()?;
+    if vc.is_some() {
+        return Err(HttpErr::ClientErr(StatusCode::BAD_REQUEST, TMR.to_string()));
+    }
+    let code = generate_code();
+    redis_conn!().set::<_, _, ()>(&vck, &code).await.ieh()?;
+    Ok(Json(VerifyCodeResp { code }))
+}
+
+pub fn route(state: AppState) -> Router {
+    Router::new()
+        .nest(
+            "/user",
+            Router::new()
+                .route("/login", post(login))
+                .route("/refresh_token", post(refresh))
+                .route("/register", post(register))
+                .route("/verify_code", post(verify_code)),
+        )
+        .with_state(state)
 }

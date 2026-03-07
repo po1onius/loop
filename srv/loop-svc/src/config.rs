@@ -1,6 +1,9 @@
 use arc_swap::ArcSwap;
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, LazyLock};
+use std::{
+    collections::HashMap,
+    sync::{Arc, LazyLock},
+};
 
 #[derive(Serialize, Deserialize, Default)]
 pub struct Crypto {
@@ -10,12 +13,25 @@ pub struct Crypto {
 
 #[derive(Serialize, Deserialize, Default)]
 pub struct SMTP {
-    pub jwt_rsa_pri_key: String,
-    pub jwt_rsa_pub_key: String,
+    pub sender: String,
+    pub token: String,
+    pub domain: String,
+}
+
+#[derive(Serialize, Deserialize, Default)]
+pub struct Email {
+    pub from: String,
+    pub smtp: SMTP,
 }
 
 #[derive(Serialize, Deserialize, Default)]
 pub struct SMS {}
+
+#[derive(Serialize, Deserialize, Default)]
+pub struct Perm {
+    pub perm_ver: u32,
+    pub role_perm: HashMap<String, Vec<String>>,
+}
 
 #[derive(Serialize, Deserialize, Default)]
 pub struct Config {
@@ -26,14 +42,11 @@ pub struct Config {
     pub pg_conn: String,
     pub redis_conn: String,
 
-    pub smtp: Option<SMTP>,
+    pub email: Option<Email>,
     pub sms: Option<SMS>,
+
+    pub perm: Perm,
 }
 
 pub static CONFIG: LazyLock<ArcSwap<Config>> =
     LazyLock::new(|| ArcSwap::new(Arc::new(Config::default())));
-
-// Cache key prefix
-pub mod ckp {
-    pub const VERIFY_CODE: &str = "SMS";
-}

@@ -8,11 +8,12 @@ table! {
         user_id -> BigSerial,
         username -> Text,
         account -> Text,
-        pwd -> Text
+        pwd -> Text,
+        role -> Text
     }
 }
 
-#[derive(Queryable, Debug)]
+#[derive(Queryable, Selectable, Debug)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
 #[diesel(table_name = users)]
 pub struct User {
@@ -20,6 +21,7 @@ pub struct User {
     pub username: String,
     pub account: String,
     pub pwd: String,
+    pub role: String,
 }
 
 #[derive(Insertable)]
@@ -30,21 +32,6 @@ pub struct NewUser<'a> {
     pub account: &'a str,
     pub pwd: &'a str,
 }
-
-/*
-CREATE TABLE refresh_tokens (
-    id BIGSERIAL PRIMARY KEY,
-    user_id BIGINT NOT NULL,
-    token_hash TEXT NOT NULL UNIQUE,
-    device_id TEXT,
-    expires_at TIMESTAMPTZ NOT NULL,
-    revoked_at TIMESTAMPTZ,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-
-    ip_address INET,
-    user_agent TEXT,
-);
- */
 
 table! {
     refresh_tokens(id) {
@@ -61,7 +48,7 @@ table! {
     }
 }
 
-#[derive(Queryable, Debug)]
+#[derive(Queryable, Selectable, Debug)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
 #[diesel(table_name = refresh_tokens)]
 pub struct RefreshTokens {
@@ -91,12 +78,28 @@ pub struct NewRefreshTokens<'a> {
     pub user_agent: Option<&'a str>,
 }
 
+joinable!(refresh_tokens -> users (user_id));
+allow_tables_to_appear_in_same_query!(users, refresh_tokens);
+
 impl User {
     pub async fn select_by_user_id(
         user_id: i64,
         conn: &mut DieselConn,
-    ) -> Result<Self, diesel::result::Error> {
-        users::table.find(user_id).first::<User>(conn).await
+    ) -> Result<Option<Self>, diesel::result::Error> {
+        users::table
+            .find(user_id)
+            .first::<User>(conn)
+            .await
+            .map_or_else(
+                |e| {
+                    if e == diesel::NotFound {
+                        Ok(None)
+                    } else {
+                        Err(e)
+                    }
+                },
+                |u| Ok(Some(u)),
+            )
     }
 
     pub async fn select_by_account(
@@ -148,5 +151,27 @@ impl RefreshTokens {
             .values(item)
             .execute(conn)
             .await
+    }
+
+    pub async fn select_join_user_by_token(
+        hash: &str,
+        conn: &mut DieselConn,
+    ) -> QueryResult<Option<(RefreshTokens, User)>> {
+        refresh_tokens::table
+            .inner_join(users::table.on(users::user_id.eq(refresh_tokens::user_id)))
+            .filter(refresh_tokens::token_hash.eq(hash))
+            .select((RefreshTokens::as_select(), User::as_select()))
+            .first::<(Self, User)>(conn)
+            .await
+            .map_or_else(
+                |e| {
+                    if e == diesel::NotFound {
+                        Ok(None)
+                    } else {
+                        Err(e)
+                    }
+                },
+                |u| Ok(Some(u)),
+            )
     }
 }
