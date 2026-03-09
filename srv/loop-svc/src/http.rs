@@ -19,7 +19,7 @@ struct Claims {
     pub patch_perm: PatchPerm,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Default)]
 struct PatchPerm {
     pub ban: Vec<String>,
     pub ext: Vec<String>,
@@ -44,4 +44,7 @@ pub fn route() -> Router {
 pub mod err_key {
     pub const TMR: &str = "too_many_requests";
     pub const RTE: &str = "refresh_token_expction";
+    pub const VCE: &str = "verfiy_code_expired";
+    pub const VCW: &str = "verfiy_code_wrong";
+    pub const XE: &str = "???";
 }

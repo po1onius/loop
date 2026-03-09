@@ -31,6 +31,17 @@ services:
     ports:
       - "6319:6379"
 
+  nacos:
+    image: qingpan/rnacos
+    container_name: rnacos
+    ports:
+      - "8848:8848"
+      - "9848:9848"
+      - "10848:10848"
+    volumes:
+      - rnacos-data:/io
+
 volumes:
   loop-pgdata:
   loop-redis-data:
+  rnacos-data:

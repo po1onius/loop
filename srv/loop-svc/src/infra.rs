@@ -30,8 +30,14 @@ pub async fn nacos_run() -> ConfigService {
         .await
         .unwrap();
     CONFIG.rcu(|cfg| {
-        serde_json::from_str(&config_resp.content())
-            .map_or_else(|_| cfg.to_owned(), |v| Arc::new(v))
+        toml::from_str(&config_resp.content()).map_or_else(
+            |e| {
+                tracing::error!("config error: {}", e);
+                println!("{}", e);
+                cfg.to_owned()
+            },
+            |v| Arc::new(v),
+        )
     });
 
     config_service
@@ -53,8 +59,7 @@ impl ConfigChangeListener for SimpleConfigChangeListener {
     fn notify(&self, config_resp: ConfigResponse) {
         tracing::info!("listen the config={}", config_resp);
         CONFIG.rcu(|cfg| {
-            serde_json::from_str(&config_resp.content())
-                .map_or_else(|_| cfg.to_owned(), |v| Arc::new(v))
+            toml::from_str(&config_resp.content()).map_or_else(|_| cfg.to_owned(), |v| Arc::new(v))
         });
     }
 }

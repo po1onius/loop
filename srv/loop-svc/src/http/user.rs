@@ -1,14 +1,14 @@
 use crate::{
     config::CONFIG,
     http::{
-        AppState, Claims,
-        err_key::{RTE, TMR},
+        AppState, Claims, PatchPerm,
+        err_key::{RTE, TMR, VCE, VCW, XE},
         util::{ckb_vc, generate_code, hex_encode},
     },
 };
 use axum::{Json, Router, extract::State, routing::post};
 use base64::Engine;
-use bcrypt::verify;
+use bcrypt::{DEFAULT_COST, hash, verify};
 use chrono::{Duration, Utc};
 use diesel_async::{AsyncConnection, scoped_futures::ScopedFutureExt};
 use http::StatusCode;
@@ -19,7 +19,7 @@ use loop_dto::{
 };
 use loop_svc_model::{
     DieselConn,
-    account::{NewRefreshTokens, RefreshTokens, User},
+    account::{NewRefreshTokens, NewUser, RefreshTokens, User},
 };
 use rand::{Rng, rngs::ThreadRng};
 use redis::AsyncCommands;
@@ -47,13 +47,15 @@ pub async fn login(
                     .then_some(())
                     .eh(StatusCode::BAD_REQUEST, "password error")?;
 
-                let (access_token, access_exp) = mint_access_token(&state, &cur_user)?;
+                let (access_token, access_exp) =
+                    mint_access_token(&state, cur_user.user_id, cur_user.role)?;
                 let (refresh_token, refresh_exp) =
                     mint_refresh_token(cur_user.user_id, conn).await?;
                 Ok(Json(LoginResp {
                     access_token,
                     expires_in: access_exp,
                     refresh_token,
+                    refresh_exp,
                 }))
             }
             .scope_boxed()
@@ -70,27 +72,30 @@ pub async fn refresh(
     db_conn!()
         .transaction(|conn| {
             async {
-                let row = RefreshTokens::select_by_token_hash(&token_hash, conn)
-                    .await
-                    .ieh()?
-                    .eh(StatusCode::BAD_REQUEST, "invalid refresh token")?;
+                let (refresh_token, user) =
+                    RefreshTokens::select_join_user_by_token(&token_hash, conn)
+                        .await
+                        .ieh()?
+                        .eh(StatusCode::BAD_REQUEST, "invalid refresh token")?;
 
-                if row.expires_at <= now || row.revoked_at.is_some() {
+                if refresh_token.expires_at <= now || refresh_token.revoked_at.is_some() {
                     return Err(HttpErr::ClientErr(
                         StatusCode::UNAUTHORIZED,
                         RTE.to_string(),
                     ));
                 }
 
-                RefreshTokens::expire(row.id, conn).await.ieh()?;
+                RefreshTokens::expire(refresh_token.id, conn).await.ieh()?;
 
-                let (access_token, access_exp) = mint_access_token(&state, &row)?;
+                let (access_token, access_exp) =
+                    mint_access_token(&state, refresh_token.user_id, user.role)?;
                 let (new_refresh_token, refresh_exp) =
-                    mint_refresh_token(row.user_id, conn).await?;
+                    mint_refresh_token(refresh_token.user_id, conn).await?;
                 Ok(Json(LoginResp {
                     access_token,
                     expires_in: access_exp,
                     refresh_token: new_refresh_token,
+                    refresh_exp,
                 }))
             }
             .scope_boxed()
@@ -98,15 +103,19 @@ pub async fn refresh(
         .await
 }
 
-fn mint_access_token(state: &AppState, user: &User) -> Result<(String, i64), HttpErr> {
+fn mint_access_token(
+    state: &AppState,
+    user_id: i64,
+    role: String,
+) -> Result<(String, i64), HttpErr> {
     let exp = Utc::now().timestamp() + CONFIG.load().access_ttl;
     let claims = Claims {
         exp: exp as usize,
-        user_id: user.user_id,
+        user_id,
 
         perm_ver: CONFIG.load().perm.perm_ver,
-        role: user.role,
-        ..Default
+        role: role,
+        patch_perm: PatchPerm::default(),
     };
 
     let token = encode(&Header::new(Algorithm::RS256), &claims, &state.jwt_enc).ieh()?;
@@ -154,6 +163,29 @@ pub async fn register(
     //State(state): State<AppState>,
     Json(req): Json<RegisterRequest>,
 ) -> Result<(), HttpErr> {
+    let vck = ckb_vc(&req.account);
+    let vc = redis_conn!()
+        .get::<_, Option<String>>(&vck)
+        .await
+        .ieh()?
+        .eh(StatusCode::BAD_REQUEST, VCE)?;
+    if vc != req.verify_code {
+        return Err(HttpErr::ClientErr(StatusCode::BAD_REQUEST, VCW.to_string()));
+    }
+
+    if req.username.len() > 50 || req.account.len() > 100 || req.pwd.len() > 16 {
+        return Err(HttpErr::ClientErr(StatusCode::BAD_REQUEST, XE.to_string()));
+    }
+
+    let hash_pwd = hash(&req.pwd, DEFAULT_COST).ieh()?;
+
+    let new_user = NewUser {
+        username: &req.username,
+        account: &req.account,
+        pwd: &hash_pwd,
+    };
+
+    User::insert(&new_user, &mut db_conn!()).await.ieh()?;
     Ok(())
 }
 

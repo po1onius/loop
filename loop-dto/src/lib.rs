@@ -14,6 +14,7 @@ pub struct LoginResp {
     pub access_token: String,
     pub expires_in: i64,
     pub refresh_token: String,
+    pub refresh_exp: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize, TS)]
