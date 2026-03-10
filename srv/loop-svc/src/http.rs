@@ -1,9 +1,10 @@
-pub mod user;
+pub mod api;
+pub mod middleware;
 mod util;
 
 use crate::{
     config::CONFIG,
-    http::user::{login, refresh},
+    http::api::user::{self, login, refresh},
 };
 use axum::{Router, routing::post};
 use jsonwebtoken::{DecodingKey, EncodingKey};
@@ -31,13 +32,12 @@ pub struct AppState {
     pub jwt_dec: DecodingKey,
 }
 
-pub fn route() -> Router {
-    let state = AppState {
-        jwt_dec: DecodingKey::from_rsa_pem(CONFIG.load().crypto.jwt_rsa_pub_key.as_bytes())
-            .unwrap(),
-        jwt_enc: EncodingKey::from_rsa_pem(CONFIG.load().crypto.jwt_rsa_pri_key.as_bytes())
-            .unwrap(),
-    };
+#[derive(Clone)]
+pub struct AuthInfo {
+    user_id: i64,
+}
+
+pub fn route(state: AppState) -> Router {
     Router::new().merge(user::route(state))
 }
 
@@ -47,4 +47,5 @@ pub mod err_key {
     pub const VCE: &str = "verfiy_code_expired";
     pub const VCW: &str = "verfiy_code_wrong";
     pub const XE: &str = "???";
+    pub const EMS: &str = "email_send_error";
 }

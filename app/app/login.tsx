@@ -9,18 +9,31 @@ import {
 import { router } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { login } from "@/lib/auth-api";
 import { ThemedText } from "@/components/themed-text";
 import { ThemedView } from "@/components/themed-view";
 
 export default function LoginScreen() {
   const [account, setAccount] = useState("");
   const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
 
-  const handleLogin = () => {
+  const handleLogin = async () => {
     if (!account.trim() || !password) {
       return;
     }
-    router.replace("/(tabs)");
+
+    setSubmitting(true);
+    setError("");
+    try {
+      await login(account.trim(), password);
+      router.replace("/(tabs)");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "登录失败");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -54,16 +67,22 @@ export default function LoginScreen() {
               value={password}
               onChangeText={setPassword}
             />
+            {error ? <ThemedText style={styles.errorText}>{error}</ThemedText> : null}
 
             <Pressable
               style={[
                 styles.button,
-                !account.trim() || !password ? styles.buttonDisabled : undefined,
+                !account.trim() || !password || submitting ? styles.buttonDisabled : undefined,
               ]}
               onPress={handleLogin}
-              disabled={!account.trim() || !password}
+              disabled={!account.trim() || !password || submitting}
             >
-              <ThemedText style={styles.buttonText}>登录</ThemedText>
+              <ThemedText style={styles.buttonText}>
+                {submitting ? "登录中..." : "登录"}
+              </ThemedText>
+            </Pressable>
+            <Pressable onPress={() => router.push("./register")} style={styles.linkWrap}>
+              <ThemedText style={styles.linkText}>还没有账号？去注册</ThemedText>
             </Pressable>
           </ThemedView>
         </ThemedView>
@@ -120,6 +139,18 @@ const styles = StyleSheet.create({
   },
   buttonText: {
     color: "#FFFFFF",
+    fontWeight: "600",
+  },
+  errorText: {
+    color: "#D64545",
+  },
+  linkWrap: {
+    alignItems: "center",
+    marginTop: 4,
+    paddingVertical: 4,
+  },
+  linkText: {
+    color: "#0A7EA4",
     fontWeight: "600",
   },
 });

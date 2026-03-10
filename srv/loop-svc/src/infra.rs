@@ -1,14 +1,17 @@
 pub mod notify;
 
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use nacos_sdk::api::config::{
     ConfigChangeListener, ConfigResponse, ConfigService, ConfigServiceBuilder,
 };
 use nacos_sdk::api::constants;
 use nacos_sdk::api::props::ClientProps;
+use tera::Tera;
 
 use crate::config::CONFIG;
+
+pub static TERA: LazyLock<Tera> = LazyLock::new(|| Tera::new("static/templates/**/*").unwrap());
 
 pub async fn nacos_run() -> ConfigService {
     let client_props = ClientProps::new()

@@ -46,6 +46,8 @@ pub struct Config {
     pub sms: Option<SMS>,
 
     pub perm: Perm,
+
+    pub whith_list_api: Vec<String>,
 }
 
 pub static CONFIG: LazyLock<ArcSwap<Config>> =

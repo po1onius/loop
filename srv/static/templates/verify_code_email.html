@@ -1,0 +1,40 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>验证码</title>
+  </head>
+  <body
+    style="font-family: Arial, sans-serif; background: #f5f5f5; padding: 24px"
+  >
+    <div
+      style="
+        max-width: 600px;
+        margin: 0 auto;
+        background: #ffffff;
+        padding: 32px;
+        border-radius: 12px;
+      "
+    >
+      <h2 style="margin-top: 0">邮箱验证码</h2>
+      <p>您好，您本次登录的验证码为：</p>
+
+      <div
+        style="
+          font-size: 32px;
+          font-weight: bold;
+          letter-spacing: 6px;
+          color: #2b6cf0;
+          margin: 24px 0;
+        "
+      >
+        {{ code }}
+      </div>
+
+      <p>验证码 {{ expire_minutes }} 分钟内有效。</p>
+      <p style="color: #999; font-size: 12px">
+        如果这不是您的操作，请忽略本邮件。
+      </p>
+    </div>
+  </body>
+</html>

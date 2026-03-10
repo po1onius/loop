@@ -41,6 +41,7 @@ base64 = { workspace = true }
 chrono = { workspace = true }
 arc-swap = { workspace = true }
 paste = { workspace = true }
+tera = { workspace = true }
 
 [dev-dependencies]
 eventsource-stream = "0.2"

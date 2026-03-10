@@ -2,15 +2,18 @@ use crate::{
     config::CONFIG,
     http::{
         AppState, Claims, PatchPerm,
-        err_key::{RTE, TMR, VCE, VCW, XE},
+        err_key::{EMS, RTE, TMR, VCE, VCW, XE},
         util::{ckb_vc, generate_code, hex_encode},
     },
+    infra::notify::email_code,
 };
 use axum::{Json, Router, extract::State, routing::post};
 use base64::Engine;
 use bcrypt::{DEFAULT_COST, hash, verify};
 use chrono::{Duration, Utc};
+use diesel::expression::is_aggregate::No;
 use diesel_async::{AsyncConnection, scoped_futures::ScopedFutureExt};
+use futures_util::TryFutureExt;
 use http::StatusCode;
 use jsonwebtoken::{Algorithm, Header, encode};
 use loop_dto::{
@@ -22,7 +25,7 @@ use loop_svc_model::{
     account::{NewRefreshTokens, NewUser, RefreshTokens, User},
 };
 use rand::{Rng, rngs::ThreadRng};
-use redis::AsyncCommands;
+use redis::{AsyncCommands, Expiry, SetOptions};
 use sha2::{Digest, Sha256};
 use srv_common::{
     db_conn,
@@ -159,10 +162,7 @@ fn hash_refresh_token(token: &str) -> String {
     hex_encode(out)
 }
 
-pub async fn register(
-    //State(state): State<AppState>,
-    Json(req): Json<RegisterRequest>,
-) -> Result<(), HttpErr> {
+pub async fn register(Json(req): Json<RegisterRequest>) -> Result<(), HttpErr> {
     let vck = ckb_vc(&req.account);
     let vc = redis_conn!()
         .get::<_, Option<String>>(&vck)
@@ -192,12 +192,15 @@ pub async fn register(
 pub async fn verify_code(
     Json(req): Json<VerifyCodeRequest>,
 ) -> Result<Json<VerifyCodeResp>, HttpErr> {
-    let vck = ckb_vc(req.account);
+    let vck = ckb_vc(&req.account);
     let vc: Option<String> = redis_conn!().get(&vck).await.ieh()?;
     if vc.is_some() {
         return Err(HttpErr::ClientErr(StatusCode::BAD_REQUEST, TMR.to_string()));
     }
     let code = generate_code();
+    email_code(&code, &req.account, "", &None)
+        .await
+        .eh(StatusCode::BAD_REQUEST, EMS)?;
     redis_conn!().set::<_, _, ()>(&vck, &code).await.ieh()?;
     Ok(Json(VerifyCodeResp { code }))
 }

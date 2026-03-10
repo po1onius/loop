@@ -30,7 +30,7 @@ tracing-appender = { version = "*" }
 redis = "*"
 deadpool-redis = "*"
 rand = { version = "*", features = ["thread_rng"] }
-lettre = { version = "*", default-features = false, features = ["rustls-tls", "builder", "smtp-transport"] }
+lettre = { version = "*", default-features = false, features = ["rustls-tls", "builder", "smtp-transport", "tokio1", "tokio1-rustls"] }
 http = "*"
 tower-http = { version = "*", features = ["cors"] }
 sha2 = "*"
@@ -49,6 +49,7 @@ chrono = { version = "*", features = ["serde"] }
 ipnet = "*"
 arc-swap = "*"
 paste = "*"
+tera = "*"
 
 
 [profile.release]

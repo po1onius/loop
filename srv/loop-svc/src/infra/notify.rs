@@ -1,13 +1,14 @@
 use anyhow::anyhow;
 use lettre::{
-    Message, SmtpTransport, Transport,
+    AsyncSmtpTransport, AsyncTransport, Message, SmtpTransport, Tokio1Executor, Transport,
     message::header::ContentType,
     transport::smtp::authentication::{Credentials, Mechanism},
 };
+use tera::{Context, Tera};
 
-use crate::config::CONFIG;
+use crate::{config::CONFIG, infra::TERA};
 
-pub fn email_code(
+pub async fn email_code(
     content: &str,
     receiver: &str,
     subject: &str,
@@ -16,6 +17,11 @@ pub fn email_code(
     let Some(email_cfg) = &CONFIG.load().email else {
         return Err(anyhow!(""));
     };
+
+    let mut tera_ctx = Context::new();
+    tera_ctx.insert("code", content);
+    tera_ctx.insert("expire_minutes", "2");
+    let content = TERA.render("verify_code_email.html", &tera_ctx)?;
 
     let from = from.as_ref().unwrap_or(&email_cfg.from);
 
@@ -26,18 +32,13 @@ pub fn email_code(
         .header(ContentType::TEXT_HTML)
         .body(content.to_string())?;
 
-    // Create the SMTPS transport
-    let sender = SmtpTransport::relay(&email_cfg.smtp.domain)?
-        // Add credentials for authentication
-        .credentials(Credentials::new(
-            email_cfg.smtp.sender.clone(),
-            email_cfg.smtp.token.clone(),
-        ))
-        // Optionally configure expected authentication mechanism
-        .authentication(vec![Mechanism::Plain])
+    let creds = Credentials::new(email_cfg.smtp.sender.clone(), email_cfg.smtp.token.clone());
+
+    let mailer = AsyncSmtpTransport::<Tokio1Executor>::relay("smtp.example.com")?
+        .credentials(creds)
         .build();
 
-    // Send the email via remote relay
-    sender.send(&email)?;
+    mailer.send(email).await?;
+
     Ok(())
 }
