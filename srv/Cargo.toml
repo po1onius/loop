@@ -39,7 +39,6 @@ futures-util = "*"
 dashmap = "*"
 tokio-stream = "*"
 tower-cookies = "*"
-srv-common = { git = "ssh://git@github.com/po1onius/imitv.git" }
 loop-svc-model = { path = "loop-svc-model" }
 time = "*"
 loop-dto = { path = "../loop-dto" }

@@ -32,7 +32,6 @@ futures-util = { workspace = true }
 dashmap = { workspace = true }
 tokio-stream = { workspace = true }
 tower-cookies = { workspace = true }
-srv-common = { workspace = true }
 chrono = { workspace = true }
 ipnet = { workspace = true }
 

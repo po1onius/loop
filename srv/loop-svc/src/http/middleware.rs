@@ -1,6 +1,6 @@
 use crate::{
     config::CONFIG,
-    http::{AppState, AuthInfo, Claims},
+    http::{AppState, AuthInfo, Claims, HttpErr, InnerExceptionHandle},
 };
 use axum::{
     body::Body,
@@ -8,29 +8,57 @@ use axum::{
     middleware::Next,
     response::Response,
 };
-use srv_common::http::{HttpErr, auth_check};
-use tower_cookies::Cookies;
+use http::{StatusCode, header::AUTHORIZATION};
+use jsonwebtoken::{Algorithm, Validation, decode};
+
+use axum::{extract::FromRequestParts, http::request::Parts};
+
+impl<S> FromRequestParts<S> for AuthInfo
+where
+    S: Send + Sync,
+{
+    type Rejection = HttpErr;
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        parts.extensions.get::<AuthInfo>().cloned().ieh()
+    }
+}
 
 pub async fn auth(
     State(state): State<AppState>,
-    cookies: Cookies,
-    req: Request,
+    mut req: Request,
     next: Next,
 ) -> Result<Response<Body>, HttpErr> {
-    let cfg = CONFIG.load();
-    let whith_list = cfg
-        .whith_list_api
-        .iter()
-        .map(|s| s.as_str())
-        .collect::<Vec<_>>();
-    auth_check(
-        cookies,
-        req,
-        next,
-        &state.jwt_dec,
-        &whith_list,
-        "auth",
-        |c: Claims| AuthInfo { user_id: c.user_id },
-    )
-    .await
+    let auth_info = req
+        .headers()
+        .get(AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|t| t.strip_prefix("Bearer "))
+        .and_then(|t| {
+            let mut validation = Validation::new(Algorithm::RS256);
+            validation.validate_aud = false;
+            validation.leeway = 0;
+            decode::<Claims>(t, &state.jwt_dec, &validation).ok()
+        })
+        .map(|c| c.claims)
+        .map(|c| AuthInfo { user_id: c.user_id });
+
+    let route = req.uri().to_string();
+
+    if let Some(auth_info) = auth_info {
+        let ext = req.extensions_mut();
+        ext.insert(auth_info);
+    } else if CONFIG.load().whith_list_api.contains(&route) {
+        tracing::debug!("white list");
+    } else {
+        tracing::debug!("UNAUTHORIZED");
+        return Err(HttpErr::ClientErr(
+            StatusCode::UNAUTHORIZED,
+            "UNAUTHORIZED".to_string(),
+        ));
+    }
+
+    tracing::debug!("route: {}", route);
+
+    let res = next.run(req).await;
+    Ok(res)
 }

@@ -1,19 +1,19 @@
 use crate::{
     config::CONFIG,
+    db_conn,
     http::{
-        AppState, Claims, PatchPerm,
+        AppState, Claims, ExceptionHandle, HttpErr, InnerExceptionHandle, PatchPerm,
         err_key::{EMS, RTE, TMR, VCE, VCW, XE},
         util::{ckb_vc, generate_code, hex_encode},
     },
     infra::notify::email_code,
+    redis_conn,
 };
 use axum::{Json, Router, extract::State, routing::post};
 use base64::Engine;
 use bcrypt::{DEFAULT_COST, hash, verify};
 use chrono::{Duration, Utc};
-use diesel::expression::is_aggregate::No;
 use diesel_async::{AsyncConnection, scoped_futures::ScopedFutureExt};
-use futures_util::TryFutureExt;
 use http::StatusCode;
 use jsonwebtoken::{Algorithm, Header, encode};
 use loop_dto::{
@@ -25,13 +25,8 @@ use loop_svc_model::{
     account::{NewRefreshTokens, NewUser, RefreshTokens, User},
 };
 use rand::{Rng, rngs::ThreadRng};
-use redis::{AsyncCommands, Expiry, SetOptions};
+use redis::AsyncCommands;
 use sha2::{Digest, Sha256};
-use srv_common::{
-    db_conn,
-    http::{ExceptionHandle, HttpErr, InnerExceptionHandle},
-    redis_conn,
-};
 
 pub async fn login(
     State(state): State<AppState>,

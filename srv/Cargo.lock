@@ -1575,7 +1575,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "srv-common",
  "tera",
  "thiserror 2.0.18",
  "time",
@@ -1617,7 +1616,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "srv-common",
  "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
@@ -2686,30 +2684,6 @@ checksum = "86f4aa3ad99f2088c990dfa82d367e19cb29268ed67c574d10d0a4bfe71f07e0"
 dependencies = [
  "libc",
  "windows-sys 0.60.2",
-]
-
-[[package]]
-name = "srv-common"
-version = "0.0.1"
-source = "git+ssh://git@github.com/po1onius/imitv.git#6d5037edd8db3a5be3b1caacbfd44869d3db64af"
-dependencies = [
- "anyhow",
- "axum 0.8.8",
- "deadpool 0.13.0",
- "deadpool-redis",
- "diesel",
- "diesel-async",
- "hex",
- "http",
- "jsonwebtoken",
- "serde",
- "sha2",
- "thiserror 2.0.18",
- "tokio",
- "tower-cookies",
- "tower-http",
- "tracing",
- "uuid",
 ]
 
 [[package]]
