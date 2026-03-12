@@ -43,6 +43,7 @@ pub async fn auth(
         .map(|c| AuthInfo { user_id: c.user_id });
 
     let route = req.uri().to_string();
+    tracing::debug!("route: {}", route);
 
     if let Some(auth_info) = auth_info {
         let ext = req.extensions_mut();
@@ -56,8 +57,6 @@ pub async fn auth(
             "UNAUTHORIZED".to_string(),
         ));
     }
-
-    tracing::debug!("route: {}", route);
 
     let res = next.run(req).await;
     Ok(res)

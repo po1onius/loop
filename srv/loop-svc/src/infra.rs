@@ -12,6 +12,9 @@ use nacos_sdk::api::props::ClientProps;
 use std::sync::OnceLock;
 use std::sync::{Arc, LazyLock};
 use tera::Tera;
+use tracing_appender::non_blocking::WorkerGuard;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::{EnvFilter, fmt};
 
 use crate::config::CONFIG;
 
@@ -21,15 +24,13 @@ pub static REDIS_POOL: OnceLock<RedisPool> = OnceLock::new();
 
 pub fn redis_init(conn_cfg: &str) {
     let cfg = Config::from_url(conn_cfg);
-    let pool = cfg
-        .create_pool(Some(Runtime::Tokio1))
-        .expect("redis init error");
+    let pool = cfg.create_pool(Some(Runtime::Tokio1)).unwrap();
     _ = REDIS_POOL.set(pool);
 }
 
 pub fn init_db(conn_cfg: &str) {
     let config = AsyncDieselConnectionManager::<diesel_async::AsyncPgConnection>::new(conn_cfg);
-    let pool = Pool::builder(config).build().expect("db init error");
+    let pool = Pool::builder(config).build().unwrap();
     _ = PG_POOL.set(pool);
 }
 
@@ -85,4 +86,33 @@ impl ConfigChangeListener for SimpleConfigChangeListener {
             toml::from_str(&config_resp.content()).map_or_else(|_| cfg.to_owned(), |v| Arc::new(v))
         });
     }
+}
+
+pub fn init_log() -> WorkerGuard {
+    let file_appender = tracing_appender::rolling::hourly("log", "prefix.log");
+    let (file_layer, guard) = tracing_appender::non_blocking(file_appender);
+    let subscriber = tracing_subscriber::registry()
+        .with(
+            EnvFilter::new("debug")
+                .add_directive("h2=off".parse().unwrap())
+                .add_directive("nacos_sdk=off".parse().unwrap())
+                .add_directive("tower=off".parse().unwrap())
+                .add_directive("hyper_util=off".parse().unwrap()),
+        )
+        .with(
+            fmt::Layer::new()
+                .with_writer(std::io::stdout)
+                .with_file(true)
+                .with_line_number(true),
+        )
+        .with(
+            fmt::Layer::new()
+                .with_writer(file_layer)
+                .with_ansi(false)
+                .with_file(true)
+                .with_line_number(true),
+        );
+    tracing::subscriber::set_global_default(subscriber).unwrap();
+    tracing::debug!("log test");
+    guard
 }

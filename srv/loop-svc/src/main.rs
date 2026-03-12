@@ -6,16 +6,18 @@ use std::sync::Arc;
 
 use crate::{
     config::CONFIG,
-    http::{AppState, http_serve, middleware::auth, route},
-    infra::{init_db, nacos_run},
+    http::{AppState, middleware::auth, route},
+    infra::{init_db, init_log, nacos_run, redis_init},
 };
 use axum::{Router, middleware};
 use jsonwebtoken::{DecodingKey, EncodingKey};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let _guard = init_log();
     let _nacos = nacos_run().await;
     init_db(&CONFIG.load().pg_conn);
+    redis_init(&CONFIG.load().redis_conn);
 
     let state = AppState {
         jwt_dec: Arc::new(
@@ -30,6 +32,10 @@ async fn main() -> anyhow::Result<()> {
         .nest("/loop", route(state.clone()))
         .layer(middleware::from_fn_with_state(state, auth));
 
-    http_serve(app, 3000).await;
+    let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", 3000))
+        .await
+        .unwrap();
+    tracing::info!("service start");
+    axum::serve(listener, app).await.unwrap();
     Ok(())
 }

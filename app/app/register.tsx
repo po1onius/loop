@@ -35,7 +35,7 @@ export default function RegisterScreen() {
     setError("");
     setInfo("");
     try {
-      const data = await verifyCode(account.trim());
+      const data = await verifyCode({ account: account.trim() });
       if (data.code) {
         setInfo(`验证码已发送（当前验证码：${data.code})`);
       } else {
@@ -147,7 +147,7 @@ export default function RegisterScreen() {
 
             <TextInput
               style={styles.input}
-              placeholder="密码（最多16位）"
+              placeholder="密码(最多16位)"
               placeholderTextColor="#8A94A6"
               secureTextEntry
               value={password}

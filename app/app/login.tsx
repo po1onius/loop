@@ -27,7 +27,10 @@ export default function LoginScreen() {
     setSubmitting(true);
     setError("");
     try {
-      await login(account.trim(), password);
+      await login({
+        account: account.trim(),
+        password,
+      });
       router.replace("/(tabs)");
     } catch (e) {
       setError(e instanceof Error ? e.message : "登录失败");

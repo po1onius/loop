@@ -1,10 +1,9 @@
 use anyhow::anyhow;
 use lettre::{
-    AsyncSmtpTransport, AsyncTransport, Message, SmtpTransport, Tokio1Executor, Transport,
-    message::header::ContentType,
-    transport::smtp::authentication::{Credentials, Mechanism},
+    AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor, message::header::ContentType,
+    transport::smtp::authentication::Credentials,
 };
-use tera::{Context, Tera};
+use tera::Context;
 
 use crate::{config::CONFIG, infra::TERA};
 

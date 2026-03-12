@@ -1,19 +1,18 @@
+import type {
+  LoginRequest,
+  LoginResp,
+  RefreshTokenRequest,
+  RegisterRequest,
+  VerifyCodeRequest,
+  VerifyCodeResp,
+} from "@/lib/dto";
 import { Platform } from "react-native";
-
-type LoginResponse = {
-  access_token: string;
-  expires_in: number;
-  refresh_token: string;
-  refresh_exp: number;
-};
-
-type VerifyCodeResponse = {
-  code: string;
-};
 
 const API_BASE_URL =
   process.env.EXPO_PUBLIC_API_BASE_URL?.trim() ||
-  (Platform.OS === "android" ? "http://10.0.2.2:3000" : "http://127.0.0.1:3000");
+  (Platform.OS === "android"
+    ? "http://10.0.2.2:3000/loop"
+    : "http://127.0.0.1:3000/loop");
 
 async function readError(resp: Response): Promise<string> {
   try {
@@ -53,7 +52,9 @@ async function postJson<TReq, TResp>(path: string, body: TReq): Promise<TResp> {
     headers: {
       "Content-Type": "application/json",
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify(body, (_key, value) =>
+      typeof value === "bigint" ? value.toString() : value,
+    ),
   });
 
   if (!resp.ok) {
@@ -67,24 +68,53 @@ async function postJson<TReq, TResp>(path: string, body: TReq): Promise<TResp> {
   return (await resp.json()) as TResp;
 }
 
-export function login(account: string, password: string) {
-  return postJson<{ account: string; password: string }, LoginResponse>("/user/login", {
-    account,
-    password,
-  });
+function toBigInt(value: number | string | bigint, field: string): bigint {
+  try {
+    return BigInt(value);
+  } catch {
+    throw new Error(`响应字段 ${field} 不是有效整数`);
+  }
 }
 
-export function verifyCode(account: string) {
-  return postJson<{ account: string }, VerifyCodeResponse>("/user/verify_code", {
-    account,
-  });
+function normalizeLoginResp(resp: LoginResp): LoginResp {
+  return {
+    ...resp,
+    expires_in: toBigInt(resp.expires_in, "expires_in"),
+    refresh_exp: toBigInt(resp.refresh_exp, "refresh_exp"),
+  };
 }
 
-export function register(params: {
-  username: string;
-  account: string;
-  pwd: string;
-  verify_code: string;
-}) {
-  return postJson<typeof params, void>("/user/register", params);
+export async function login(params: LoginRequest): Promise<LoginResp> {
+  const resp = await postJson<LoginRequest, LoginResp>("/user/login", params);
+  return normalizeLoginResp(resp);
 }
+
+export async function refreshToken(
+  params: RefreshTokenRequest,
+): Promise<LoginResp> {
+  const resp = await postJson<RefreshTokenRequest, LoginResp>(
+    "/user/refresh_token",
+    params,
+  );
+  return normalizeLoginResp(resp);
+}
+
+export function verifyCode(params: VerifyCodeRequest): Promise<VerifyCodeResp> {
+  return postJson<VerifyCodeRequest, VerifyCodeResp>(
+    "/user/verify_code",
+    params,
+  );
+}
+
+export function register(params: RegisterRequest): Promise<void> {
+  return postJson<RegisterRequest, void>("/user/register", params);
+}
+
+export type {
+  LoginRequest,
+  LoginResp,
+  RefreshTokenRequest,
+  RegisterRequest,
+  VerifyCodeRequest,
+  VerifyCodeResp,
+};

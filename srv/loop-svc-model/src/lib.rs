@@ -1,18 +1,16 @@
 pub mod account;
 
-use deadpool::managed::{Object, Pool};
-use diesel::QueryDsl;
-use diesel_async::{
-    AsyncConnection, AsyncPgConnection, RunQueryDsl,
-    pooled_connection::AsyncDieselConnectionManager,
-};
-
-use crate::account::{RefreshTokens, User, users};
+use deadpool::managed::Object;
+use diesel_async::{AsyncPgConnection, pooled_connection::AsyncDieselConnectionManager};
 
 pub type DieselConn = Object<AsyncDieselConnectionManager<AsyncPgConnection>>;
 
 #[test]
 fn f() {
+    use crate::account::{RefreshTokens, User};
+    use deadpool::managed::Pool;
+    use diesel_async::pooled_connection::AsyncDieselConnectionManager;
+
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
