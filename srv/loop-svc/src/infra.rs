@@ -18,7 +18,10 @@ use tracing_subscriber::{EnvFilter, fmt};
 
 use crate::config::CONFIG;
 
-pub static TERA: LazyLock<Tera> = LazyLock::new(|| Tera::new("static/templates/**/*").unwrap());
+pub static TERA: LazyLock<Tera> = LazyLock::new(|| {
+    let pattern = format!("{}/../static/templates/**/*", env!("CARGO_MANIFEST_DIR"));
+    Tera::new(&pattern).unwrap()
+});
 pub static PG_POOL: OnceLock<Pool<AsyncPgConnection>> = OnceLock::new();
 pub static REDIS_POOL: OnceLock<RedisPool> = OnceLock::new();
 

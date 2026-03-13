@@ -176,4 +176,5 @@ pub mod err_key {
     pub const VCW: &str = "verfiy_code_wrong";
     pub const XE: &str = "???";
     pub const EMS: &str = "email_send_error";
+    pub const AE: &str = "already_exist";
 }

@@ -33,7 +33,7 @@ pub async fn email_code(
 
     let creds = Credentials::new(email_cfg.smtp.sender.clone(), email_cfg.smtp.token.clone());
 
-    let mailer = AsyncSmtpTransport::<Tokio1Executor>::relay("smtp.example.com")?
+    let mailer = AsyncSmtpTransport::<Tokio1Executor>::relay(&email_cfg.smtp.domain)?
         .credentials(creds)
         .build();
 

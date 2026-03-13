@@ -3,7 +3,7 @@ use crate::{
     db_conn,
     http::{
         AppState, Claims, ExceptionHandle, HttpErr, InnerExceptionHandle, PatchPerm,
-        err_key::{EMS, RTE, TMR, VCE, VCW, XE},
+        err_key::*,
         util::{ckb_vc, generate_code, hex_encode},
     },
     infra::notify::email_code,
@@ -187,6 +187,12 @@ pub async fn register(Json(req): Json<RegisterRequest>) -> Result<(), HttpErr> {
 pub async fn verify_code(
     Json(req): Json<VerifyCodeRequest>,
 ) -> Result<Json<VerifyCodeResp>, HttpErr> {
+    let user = User::select_by_account(&req.account, &mut db_conn!())
+        .await
+        .ieh()?;
+    if user.is_some() {
+        return Err(HttpErr::ClientErr(StatusCode::BAD_REQUEST, AE.to_string()));
+    }
     let vck = ckb_vc(&req.account);
     let vc: Option<String> = redis_conn!().get(&vck).await.ieh()?;
     if vc.is_some() {
