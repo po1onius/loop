@@ -1,0 +1,6 @@
+[package]
+name = "loop-im-svc"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]

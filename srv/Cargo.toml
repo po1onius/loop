@@ -1,6 +1,8 @@
 [workspace]
 members = [
-    "loop-svc",
+    "loop-event-svc",
+    "loop-im-svc",
+    "loop-community-svc",
     "loop-svc-model"
 ]
 resolver = "3"

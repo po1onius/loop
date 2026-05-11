@@ -1,5 +1,5 @@
 [package]
-name = "loop-svc"
+name = "loop-event-svc"
 version.workspace = true
 edition.workspace = true
 

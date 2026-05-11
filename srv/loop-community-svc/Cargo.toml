@@ -1,0 +1,6 @@
+[package]
+name = "loop-community-svc"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
