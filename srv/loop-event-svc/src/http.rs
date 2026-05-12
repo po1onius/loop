@@ -4,18 +4,12 @@ mod util;
 
 use crate::http::api::user;
 use axum::Router;
-use axum::response::IntoResponse;
-use axum::{body::Body, response::Response};
-use diesel::result::DatabaseErrorKind;
-use http::StatusCode;
 use jsonwebtoken::DecodingKey;
 use jsonwebtoken::EncodingKey;
+pub use loop_infra::http_error::{ApiError as HttpErr, OptionExt, ResultExt};
 use serde::Deserialize;
 use serde::Serialize;
-use std::fmt::Display;
-use std::panic::Location;
 use std::sync::Arc;
-use thiserror::Error;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Claims {
@@ -46,123 +40,24 @@ pub struct AuthInfo {
 
 #[macro_export]
 macro_rules! redis_conn {
-    () => {
-        $crate::http::InnerExceptionHandle::ieh(
-            $crate::infra::REDIS_POOL.get().expect("").get().await,
-        )?
-    };
+    () => {{
+        let pool = loop_infra::http_error::ResultExt::internal(
+            loop_infra::redis::redis_pool(),
+            "redis_pool_unavailable",
+        )?;
+        loop_infra::http_error::ResultExt::internal(pool.get().await, "redis_pool_get_failed")?
+    }};
 }
 
 #[macro_export]
 macro_rules! db_conn {
-    () => {
-        $crate::http::InnerExceptionHandle::ieh(
-            $crate::infra::PG_POOL.get().expect("").get().await,
-        )?
-    };
-}
-
-pub fn build_resp(code: StatusCode, content: &str) -> Response {
-    let mut r = Response::new(Body::new(content.to_string()));
-    *r.status_mut() = code;
-    r
-}
-
-#[derive(Error, Debug)]
-pub enum HttpErr {
-    #[error("{1}")]
-    ClientErr(StatusCode, String),
-    #[error("server error")]
-    InnerErr,
-}
-
-impl IntoResponse for HttpErr {
-    fn into_response(self) -> Response {
-        match self {
-            Self::ClientErr(code, msg) => build_resp(code, &msg),
-            Self::InnerErr => build_resp(StatusCode::INTERNAL_SERVER_ERROR, &self.to_string()),
-        }
-    }
-}
-
-fn convert_err<T, E: Display>(
-    r: Result<T, E>,
-    span: &Location,
-    log: Option<&str>,
-    code: Option<StatusCode>,
-) -> Result<T, HttpErr> {
-    r.map_err(|e| {
-        tracing::error!("{} => {}", span, e);
-        if let Some(log) = log
-            && let Some(code) = code
-        {
-            HttpErr::ClientErr(code, log.to_string())
-        } else {
-            HttpErr::InnerErr
-        }
-    })
-}
-
-pub trait InnerExceptionHandle {
-    type Output;
-    fn ieh(self) -> Self::Output;
-}
-
-impl<T, E: Display> InnerExceptionHandle for Result<T, E> {
-    type Output = Result<T, HttpErr>;
-    #[track_caller]
-    fn ieh(self) -> Self::Output {
-        let caller_span = std::panic::Location::caller();
-        convert_err(self, caller_span, None, None)
-    }
-}
-
-pub trait ExceptionHandle {
-    type Output;
-    fn eh(self, code: StatusCode, err_info: &str) -> Self::Output;
-}
-
-impl<T, E: Display> ExceptionHandle for Result<T, E> {
-    type Output = Result<T, HttpErr>;
-    #[track_caller]
-    fn eh(self, code: StatusCode, err_info: &str) -> Self::Output {
-        let caller_span = std::panic::Location::caller();
-        convert_err(self, caller_span, Some(err_info), Some(code))
-    }
-}
-
-impl<T> InnerExceptionHandle for Option<T> {
-    type Output = Result<T, HttpErr>;
-    #[track_caller]
-    fn ieh(self) -> Self::Output {
-        let caller_span = std::panic::Location::caller();
-        convert_err(self.ok_or("data is none"), caller_span, None, None)
-    }
-}
-
-impl<T> ExceptionHandle for Option<T> {
-    type Output = Result<T, HttpErr>;
-    #[track_caller]
-    fn eh(self, code: StatusCode, err_info: &str) -> Self::Output {
-        let caller_span = std::panic::Location::caller();
-        convert_err(
-            self.ok_or("data is none"),
-            caller_span,
-            Some(err_info),
-            Some(code),
-        )
-    }
-}
-
-impl From<diesel::result::Error> for HttpErr {
-    fn from(value: diesel::result::Error) -> Self {
-        match value {
-            diesel::result::Error::DatabaseError(DatabaseErrorKind::UniqueViolation, _) => {
-                HttpErr::ClientErr(StatusCode::CONFLICT, "data already exist".to_string())
-            }
-            _ => HttpErr::InnerErr,
-        }
-    }
+    () => {{
+        let pool = loop_infra::http_error::ResultExt::internal(
+            loop_infra::db::pg_pool(),
+            "pg_pool_unavailable",
+        )?;
+        loop_infra::http_error::ResultExt::internal(pool.get().await, "pg_pool_get_failed")?
+    }};
 }
 
 pub fn route(state: AppState) -> Router {
@@ -170,11 +65,21 @@ pub fn route(state: AppState) -> Router {
 }
 
 pub mod err_key {
-    pub const TMR: &str = "too_many_requests";
-    pub const RTE: &str = "refresh_token_expction";
-    pub const VCE: &str = "verfiy_code_expired";
-    pub const VCW: &str = "verfiy_code_wrong";
-    pub const XE: &str = "???";
-    pub const EMS: &str = "email_send_error";
-    pub const AE: &str = "already_exist";
+    pub const ALREADY_EXIST: &str = "already_exist";
+    pub const AUTH_CONTEXT_MISSING: &str = "auth_context_missing";
+    pub const DB_ERROR: &str = "db_error";
+    pub const EMAIL_SEND_ERROR: &str = "email_send_error";
+    pub const INVALID_INPUT: &str = "invalid_input";
+    pub const INVALID_REFRESH_TOKEN: &str = "invalid_refresh_token";
+    pub const JWT_ENCODE_ERROR: &str = "jwt_encode_error";
+    pub const PASSWORD_ERROR: &str = "password_error";
+    pub const PASSWORD_HASH_ERROR: &str = "password_hash_error";
+    pub const PASSWORD_VERIFY_ERROR: &str = "password_verify_error";
+    pub const REDIS_ERROR: &str = "redis_error";
+    pub const REFRESH_TOKEN_EXPIRED: &str = "refresh_token_expired";
+    pub const TOO_MANY_REQUESTS: &str = "too_many_requests";
+    pub const UNAUTHORIZED: &str = "unauthorized";
+    pub const USER_NOT_EXIST: &str = "user_not_exist";
+    pub const VERIFY_CODE_EXPIRED: &str = "verify_code_expired";
+    pub const VERIFY_CODE_WRONG: &str = "verify_code_wrong";
 }

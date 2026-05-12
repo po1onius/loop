@@ -29,8 +29,6 @@ pub fn generate_code() -> String {
     format!("{:06}", n)
 }
 
-
-
 #[test]
 fn f() {
     let s = String::from("abc");

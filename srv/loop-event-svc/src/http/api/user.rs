@@ -2,18 +2,19 @@ use crate::{
     config::CONFIG,
     db_conn,
     http::{
-        AppState, Claims, ExceptionHandle, HttpErr, InnerExceptionHandle, PatchPerm,
+        AppState, Claims, HttpErr, OptionExt, PatchPerm, ResultExt,
         err_key::*,
         util::{ckb_vc, generate_code, hex_encode},
     },
-    infra::notify::email_code,
     redis_conn,
+    service::notify::email_code,
 };
 use axum::{Json, Router, extract::State, routing::post};
 use base64::Engine;
 use bcrypt::{DEFAULT_COST, hash, verify};
 use chrono::{Duration, Utc};
-use diesel_async::{AsyncConnection, scoped_futures::ScopedFutureExt};
+use diesel::result::{DatabaseErrorKind, Error as DieselError};
+use diesel_async::AsyncConnection;
 use http::StatusCode;
 use jsonwebtoken::{Algorithm, Header, encode};
 use loop_dto::{
@@ -28,39 +29,37 @@ use rand::{Rng, rngs::ThreadRng};
 use redis::AsyncCommands;
 use sha2::{Digest, Sha256};
 
+#[tracing::instrument(name = "user.login", skip_all)]
 pub async fn login(
     State(state): State<AppState>,
     Json(req): Json<LoginRequest>,
 ) -> Result<Json<LoginResp>, HttpErr> {
     db_conn!()
-        .transaction(|conn| {
-            async {
-                let cur_user = User::select_by_account(&req.account, conn)
-                    .await
-                    .ieh()?
-                    .eh(StatusCode::BAD_REQUEST, "user not exist")?;
+        .transaction::<_, HttpErr, _>(async |conn| {
+            let cur_user = User::select_by_account(&req.account, conn)
+                .await
+                .internal(DB_ERROR)?
+                .client(StatusCode::BAD_REQUEST, USER_NOT_EXIST)?;
 
-                verify(&req.password, &cur_user.pwd)
-                    .ieh()?
-                    .then_some(())
-                    .eh(StatusCode::BAD_REQUEST, "password error")?;
+            verify(&req.password, &cur_user.pwd)
+                .internal(PASSWORD_VERIFY_ERROR)?
+                .then_some(())
+                .client(StatusCode::BAD_REQUEST, PASSWORD_ERROR)?;
 
-                let (access_token, access_exp) =
-                    mint_access_token(&state, cur_user.user_id, cur_user.role)?;
-                let (refresh_token, refresh_exp) =
-                    mint_refresh_token(cur_user.user_id, conn).await?;
-                Ok(Json(LoginResp {
-                    access_token,
-                    expires_in: access_exp,
-                    refresh_token,
-                    refresh_exp,
-                }))
-            }
-            .scope_boxed()
+            let (access_token, access_exp) =
+                mint_access_token(&state, cur_user.user_id, cur_user.role)?;
+            let (refresh_token, refresh_exp) = mint_refresh_token(cur_user.user_id, conn).await?;
+            Ok(Json(LoginResp {
+                access_token,
+                expires_in: access_exp,
+                refresh_token,
+                refresh_exp,
+            }))
         })
         .await
 }
 
+#[tracing::instrument(name = "user.refresh", skip_all)]
 pub async fn refresh(
     State(state): State<AppState>,
     Json(req): Json<RefreshTokenRequest>,
@@ -68,35 +67,33 @@ pub async fn refresh(
     let now = Utc::now();
     let token_hash = hash_refresh_token(&req.refresh_token);
     db_conn!()
-        .transaction(|conn| {
-            async {
-                let (refresh_token, user) =
-                    RefreshTokens::select_join_user_by_token(&token_hash, conn)
-                        .await
-                        .ieh()?
-                        .eh(StatusCode::BAD_REQUEST, "invalid refresh token")?;
+        .transaction::<_, HttpErr, _>(async |conn| {
+            let (refresh_token, user) = RefreshTokens::select_join_user_by_token(&token_hash, conn)
+                .await
+                .internal(DB_ERROR)?
+                .client(StatusCode::BAD_REQUEST, INVALID_REFRESH_TOKEN)?;
 
-                if refresh_token.expires_at <= now || refresh_token.revoked_at.is_some() {
-                    return Err(HttpErr::ClientErr(
-                        StatusCode::UNAUTHORIZED,
-                        RTE.to_string(),
-                    ));
-                }
-
-                RefreshTokens::expire(refresh_token.id, conn).await.ieh()?;
-
-                let (access_token, access_exp) =
-                    mint_access_token(&state, refresh_token.user_id, user.role)?;
-                let (new_refresh_token, refresh_exp) =
-                    mint_refresh_token(refresh_token.user_id, conn).await?;
-                Ok(Json(LoginResp {
-                    access_token,
-                    expires_in: access_exp,
-                    refresh_token: new_refresh_token,
-                    refresh_exp,
-                }))
+            if refresh_token.expires_at <= now || refresh_token.revoked_at.is_some() {
+                return Err(HttpErr::client(
+                    StatusCode::UNAUTHORIZED,
+                    REFRESH_TOKEN_EXPIRED,
+                ));
             }
-            .scope_boxed()
+
+            RefreshTokens::expire(refresh_token.id, conn)
+                .await
+                .internal(DB_ERROR)?;
+
+            let (access_token, access_exp) =
+                mint_access_token(&state, refresh_token.user_id, user.role)?;
+            let (new_refresh_token, refresh_exp) =
+                mint_refresh_token(refresh_token.user_id, conn).await?;
+            Ok(Json(LoginResp {
+                access_token,
+                expires_in: access_exp,
+                refresh_token: new_refresh_token,
+                refresh_exp,
+            }))
         })
         .await
 }
@@ -116,11 +113,13 @@ fn mint_access_token(
         patch_perm: PatchPerm::default(),
     };
 
-    let token = encode(&Header::new(Algorithm::RS256), &claims, &state.jwt_enc).ieh()?;
+    let token = encode(&Header::new(Algorithm::RS256), &claims, &state.jwt_enc)
+        .internal(JWT_ENCODE_ERROR)?;
 
     Ok((token, CONFIG.load().access_ttl))
 }
 
+#[tracing::instrument(name = "user.refresh_token.mint", skip_all)]
 async fn mint_refresh_token(user_id: i64, conn: &mut DieselConn) -> Result<(String, i64), HttpErr> {
     let ttl = Duration::seconds(CONFIG.load().refresh_ttl);
     let expires_at = Utc::now() + ttl;
@@ -138,7 +137,7 @@ async fn mint_refresh_token(user_id: i64, conn: &mut DieselConn) -> Result<(Stri
         user_agent: None,
     };
 
-    RefreshTokens::insert(new, conn).await.ieh()?;
+    RefreshTokens::insert(new, conn).await.internal(DB_ERROR)?;
 
     Ok((raw, CONFIG.load().refresh_ttl))
 }
@@ -157,22 +156,23 @@ fn hash_refresh_token(token: &str) -> String {
     hex_encode(out)
 }
 
+#[tracing::instrument(name = "user.register", skip_all)]
 pub async fn register(Json(req): Json<RegisterRequest>) -> Result<(), HttpErr> {
     let vck = ckb_vc(&req.account);
     let vc = redis_conn!()
         .get::<_, Option<String>>(&vck)
         .await
-        .ieh()?
-        .eh(StatusCode::BAD_REQUEST, VCE)?;
+        .internal(REDIS_ERROR)?
+        .client(StatusCode::BAD_REQUEST, VERIFY_CODE_EXPIRED)?;
     if vc != req.verify_code {
-        return Err(HttpErr::ClientErr(StatusCode::BAD_REQUEST, VCW.to_string()));
+        return Err(HttpErr::client(StatusCode::BAD_REQUEST, VERIFY_CODE_WRONG));
     }
 
     if req.username.len() > 50 || req.account.len() > 100 || req.pwd.len() > 16 {
-        return Err(HttpErr::ClientErr(StatusCode::BAD_REQUEST, XE.to_string()));
+        return Err(HttpErr::client(StatusCode::BAD_REQUEST, INVALID_INPUT));
     }
 
-    let hash_pwd = hash(&req.pwd, DEFAULT_COST).ieh()?;
+    let hash_pwd = hash(&req.pwd, DEFAULT_COST).internal(PASSWORD_HASH_ERROR)?;
 
     let new_user = NewUser {
         username: &req.username,
@@ -180,30 +180,45 @@ pub async fn register(Json(req): Json<RegisterRequest>) -> Result<(), HttpErr> {
         pwd: &hash_pwd,
     };
 
-    User::insert(&new_user, &mut db_conn!()).await.ieh()?;
+    User::insert(&new_user, &mut db_conn!())
+        .await
+        .map_err(map_user_insert_error)?;
     Ok(())
 }
 
+#[tracing::instrument(name = "user.verify_code", skip_all)]
 pub async fn verify_code(
     Json(req): Json<VerifyCodeRequest>,
 ) -> Result<Json<VerifyCodeResp>, HttpErr> {
     let user = User::select_by_account(&req.account, &mut db_conn!())
         .await
-        .ieh()?;
+        .internal(DB_ERROR)?;
     if user.is_some() {
-        return Err(HttpErr::ClientErr(StatusCode::BAD_REQUEST, AE.to_string()));
+        return Err(HttpErr::client(StatusCode::BAD_REQUEST, ALREADY_EXIST));
     }
     let vck = ckb_vc(&req.account);
-    let vc: Option<String> = redis_conn!().get(&vck).await.ieh()?;
+    let vc: Option<String> = redis_conn!().get(&vck).await.internal(REDIS_ERROR)?;
     if vc.is_some() {
-        return Err(HttpErr::ClientErr(StatusCode::BAD_REQUEST, TMR.to_string()));
+        return Err(HttpErr::client(StatusCode::BAD_REQUEST, TOO_MANY_REQUESTS));
     }
     let code = generate_code();
     email_code(&code, &req.account, "", &None)
         .await
-        .eh(StatusCode::BAD_REQUEST, EMS)?;
-    redis_conn!().set::<_, _, ()>(&vck, &code).await.ieh()?;
+        .internal(EMAIL_SEND_ERROR)?;
+    redis_conn!()
+        .set::<_, _, ()>(&vck, &code)
+        .await
+        .internal(REDIS_ERROR)?;
     Ok(Json(VerifyCodeResp { code }))
+}
+
+fn map_user_insert_error(err: DieselError) -> HttpErr {
+    match err {
+        DieselError::DatabaseError(DatabaseErrorKind::UniqueViolation, _) => {
+            HttpErr::client(StatusCode::CONFLICT, ALREADY_EXIST)
+        }
+        err => HttpErr::internal(DB_ERROR, err),
+    }
 }
 
 pub fn route(state: AppState) -> Router {

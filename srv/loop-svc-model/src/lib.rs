@@ -25,7 +25,7 @@ fn f() {
         // checkout a connection from the pool
         let mut conn = pool.get().await.unwrap();
 
-        let u = User::select_by_user_id(123, &mut conn).await.unwrap();
+        let _u = User::select_by_user_id(123, &mut conn).await.unwrap();
         let r = RefreshTokens::select_join_user_by_token("123", &mut conn)
             .await
             .unwrap();

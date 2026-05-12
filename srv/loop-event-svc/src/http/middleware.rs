@@ -1,6 +1,6 @@
 use crate::{
     config::CONFIG,
-    http::{AppState, AuthInfo, Claims, HttpErr, InnerExceptionHandle},
+    http::{AppState, AuthInfo, Claims, HttpErr, OptionExt, err_key::*},
 };
 use axum::{
     body::Body,
@@ -19,10 +19,15 @@ where
 {
     type Rejection = HttpErr;
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        parts.extensions.get::<AuthInfo>().cloned().ieh()
+        parts
+            .extensions
+            .get::<AuthInfo>()
+            .cloned()
+            .client(StatusCode::UNAUTHORIZED, AUTH_CONTEXT_MISSING)
     }
 }
 
+#[tracing::instrument(name = "auth.middleware", skip_all)]
 pub async fn auth(
     State(state): State<AppState>,
     mut req: Request,
@@ -46,16 +51,14 @@ pub async fn auth(
     tracing::debug!("route: {}", route);
 
     if let Some(auth_info) = auth_info {
+        tracing::debug!(user.id = auth_info.user_id, "authenticated request");
         let ext = req.extensions_mut();
         ext.insert(auth_info);
     } else if CONFIG.load().whith_list_api.contains(&route) {
         tracing::debug!("white list");
     } else {
         tracing::debug!("UNAUTHORIZED");
-        return Err(HttpErr::ClientErr(
-            StatusCode::UNAUTHORIZED,
-            "UNAUTHORIZED".to_string(),
-        ));
+        return Err(HttpErr::client(StatusCode::UNAUTHORIZED, UNAUTHORIZED));
     }
 
     let res = next.run(req).await;
