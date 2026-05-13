@@ -1,0 +1,69 @@
+logging {
+  level  = "info"
+  format = "logfmt"
+}
+
+// Boundary:
+// - Rust tracing spans are exported through OTLP to Tempo by the service.
+// - Rust tracing events are formatted as JSON log lines and tailed here.
+// - Alloy sends only logs to Loki; it does not replace the OTLP trace pipeline.
+loki.source.file "loop_event_svc" {
+  targets = [
+    {
+      __path__      = "/var/log/loop/loop-event-svc.log*",
+      job           = "loop-event-svc",
+      service_name  = "loop-event-svc",
+      log_transport = "file",
+    },
+  ]
+
+  forward_to = [loki.process.loop_json.receiver]
+
+  file_match {
+    enabled     = true
+    sync_period = "10s"
+  }
+}
+
+loki.process "loop_json" {
+  forward_to = [loki.write.local.receiver]
+
+  // Extract only low-cardinality fields as labels. Request IDs and trace IDs
+  // stay as structured metadata to avoid exploding Loki stream cardinality.
+  stage.json {
+    expressions = {
+      level            = "level",
+      message          = "message",
+      trace_id         = "\"trace.id\"",
+      request_id       = "\"request.id\"",
+      http_route       = "\"http.route\"",
+      http_status_code = "\"http.status_code\"",
+      error_code       = "\"error.code\"",
+    }
+    drop_malformed = false
+  }
+
+  stage.labels {
+    values = {
+      level = "level",
+    }
+  }
+
+  stage.structured_metadata {
+    values = {
+      message          = "message",
+      trace_id         = "trace_id",
+      request_id       = "request_id",
+      http_route       = "http_route",
+      http_status_code = "http_status_code",
+      error_code       = "error_code",
+    }
+  }
+}
+
+loki.write "local" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}
+

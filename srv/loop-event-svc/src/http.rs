@@ -6,6 +6,7 @@ use crate::http::api::user;
 use axum::Router;
 use jsonwebtoken::DecodingKey;
 use jsonwebtoken::EncodingKey;
+use loop_infra::http_error::ApiErrorCode;
 pub use loop_infra::http_error::{ApiError as HttpErr, OptionExt, ResultExt};
 use serde::Deserialize;
 use serde::Serialize;
@@ -43,9 +44,12 @@ macro_rules! redis_conn {
     () => {{
         let pool = loop_infra::http_error::ResultExt::internal(
             loop_infra::redis::redis_pool(),
-            "redis_pool_unavailable",
+            $crate::http::err_key::REDIS_POOL_UNAVAILABLE,
         )?;
-        loop_infra::http_error::ResultExt::internal(pool.get().await, "redis_pool_get_failed")?
+        loop_infra::http_error::ResultExt::internal(
+            pool.get().await,
+            $crate::http::err_key::REDIS_POOL_GET_FAILED,
+        )?
     }};
 }
 
@@ -54,9 +58,12 @@ macro_rules! db_conn {
     () => {{
         let pool = loop_infra::http_error::ResultExt::internal(
             loop_infra::db::pg_pool(),
-            "pg_pool_unavailable",
+            $crate::http::err_key::PG_POOL_UNAVAILABLE,
         )?;
-        loop_infra::http_error::ResultExt::internal(pool.get().await, "pg_pool_get_failed")?
+        loop_infra::http_error::ResultExt::internal(
+            pool.get().await,
+            $crate::http::err_key::PG_POOL_GET_FAILED,
+        )?
     }};
 }
 
@@ -64,22 +71,87 @@ pub fn route(state: AppState) -> Router {
     Router::new().merge(user::route(state))
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum ErrorCode {
+    AlreadyExist,
+    AuthContextMissing,
+    DbError,
+    EmailSendError,
+    InvalidInput,
+    InvalidRefreshToken,
+    JwtEncodeError,
+    PasswordError,
+    PasswordHashError,
+    PasswordVerifyError,
+    PgPoolGetFailed,
+    PgPoolUnavailable,
+    RedisError,
+    RedisPoolGetFailed,
+    RedisPoolUnavailable,
+    RefreshTokenExpired,
+    TooManyRequests,
+    Unauthorized,
+    UserNotExist,
+    VerifyCodeExpired,
+    VerifyCodeWrong,
+}
+
+impl ErrorCode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::AlreadyExist => "already_exist",
+            Self::AuthContextMissing => "auth_context_missing",
+            Self::DbError => "db_error",
+            Self::EmailSendError => "email_send_error",
+            Self::InvalidInput => "invalid_input",
+            Self::InvalidRefreshToken => "invalid_refresh_token",
+            Self::JwtEncodeError => "jwt_encode_error",
+            Self::PasswordError => "password_error",
+            Self::PasswordHashError => "password_hash_error",
+            Self::PasswordVerifyError => "password_verify_error",
+            Self::PgPoolGetFailed => "pg_pool_get_failed",
+            Self::PgPoolUnavailable => "pg_pool_unavailable",
+            Self::RedisError => "redis_error",
+            Self::RedisPoolGetFailed => "redis_pool_get_failed",
+            Self::RedisPoolUnavailable => "redis_pool_unavailable",
+            Self::RefreshTokenExpired => "refresh_token_expired",
+            Self::TooManyRequests => "too_many_requests",
+            Self::Unauthorized => "unauthorized",
+            Self::UserNotExist => "user_not_exist",
+            Self::VerifyCodeExpired => "verify_code_expired",
+            Self::VerifyCodeWrong => "verify_code_wrong",
+        }
+    }
+}
+
+impl From<ErrorCode> for ApiErrorCode {
+    fn from(code: ErrorCode) -> Self {
+        Self::new(code.as_str())
+    }
+}
+
 pub mod err_key {
-    pub const ALREADY_EXIST: &str = "already_exist";
-    pub const AUTH_CONTEXT_MISSING: &str = "auth_context_missing";
-    pub const DB_ERROR: &str = "db_error";
-    pub const EMAIL_SEND_ERROR: &str = "email_send_error";
-    pub const INVALID_INPUT: &str = "invalid_input";
-    pub const INVALID_REFRESH_TOKEN: &str = "invalid_refresh_token";
-    pub const JWT_ENCODE_ERROR: &str = "jwt_encode_error";
-    pub const PASSWORD_ERROR: &str = "password_error";
-    pub const PASSWORD_HASH_ERROR: &str = "password_hash_error";
-    pub const PASSWORD_VERIFY_ERROR: &str = "password_verify_error";
-    pub const REDIS_ERROR: &str = "redis_error";
-    pub const REFRESH_TOKEN_EXPIRED: &str = "refresh_token_expired";
-    pub const TOO_MANY_REQUESTS: &str = "too_many_requests";
-    pub const UNAUTHORIZED: &str = "unauthorized";
-    pub const USER_NOT_EXIST: &str = "user_not_exist";
-    pub const VERIFY_CODE_EXPIRED: &str = "verify_code_expired";
-    pub const VERIFY_CODE_WRONG: &str = "verify_code_wrong";
+    use super::ErrorCode;
+
+    pub const ALREADY_EXIST: ErrorCode = ErrorCode::AlreadyExist;
+    pub const AUTH_CONTEXT_MISSING: ErrorCode = ErrorCode::AuthContextMissing;
+    pub const DB_ERROR: ErrorCode = ErrorCode::DbError;
+    pub const EMAIL_SEND_ERROR: ErrorCode = ErrorCode::EmailSendError;
+    pub const INVALID_INPUT: ErrorCode = ErrorCode::InvalidInput;
+    pub const INVALID_REFRESH_TOKEN: ErrorCode = ErrorCode::InvalidRefreshToken;
+    pub const JWT_ENCODE_ERROR: ErrorCode = ErrorCode::JwtEncodeError;
+    pub const PASSWORD_ERROR: ErrorCode = ErrorCode::PasswordError;
+    pub const PASSWORD_HASH_ERROR: ErrorCode = ErrorCode::PasswordHashError;
+    pub const PASSWORD_VERIFY_ERROR: ErrorCode = ErrorCode::PasswordVerifyError;
+    pub const PG_POOL_GET_FAILED: ErrorCode = ErrorCode::PgPoolGetFailed;
+    pub const PG_POOL_UNAVAILABLE: ErrorCode = ErrorCode::PgPoolUnavailable;
+    pub const REDIS_ERROR: ErrorCode = ErrorCode::RedisError;
+    pub const REDIS_POOL_GET_FAILED: ErrorCode = ErrorCode::RedisPoolGetFailed;
+    pub const REDIS_POOL_UNAVAILABLE: ErrorCode = ErrorCode::RedisPoolUnavailable;
+    pub const REFRESH_TOKEN_EXPIRED: ErrorCode = ErrorCode::RefreshTokenExpired;
+    pub const TOO_MANY_REQUESTS: ErrorCode = ErrorCode::TooManyRequests;
+    pub const UNAUTHORIZED: ErrorCode = ErrorCode::Unauthorized;
+    pub const USER_NOT_EXIST: ErrorCode = ErrorCode::UserNotExist;
+    pub const VERIFY_CODE_EXPIRED: ErrorCode = ErrorCode::VerifyCodeExpired;
+    pub const VERIFY_CODE_WRONG: ErrorCode = ErrorCode::VerifyCodeWrong;
 }

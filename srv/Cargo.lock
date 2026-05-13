@@ -1565,6 +1565,7 @@ dependencies = [
  "opentelemetry_sdk",
  "serde",
  "tera",
+ "tokio",
  "toml",
  "tracing",
  "tracing-appender",

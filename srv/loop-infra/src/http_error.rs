@@ -1,51 +1,76 @@
+use crate::observability::{current_request_id, current_trace_id};
 use axum::{
     Json,
     response::{IntoResponse, Response},
 };
 use http::StatusCode;
-use opentelemetry::trace::TraceContextExt;
 use serde::Serialize;
 use std::{
     error::Error as StdError,
     fmt::{self, Display, Formatter},
     panic::Location,
 };
-use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 const INTERNAL_ERROR_MESSAGE: &str = "server error";
 const OPTION_MISSING_MESSAGE: &str = "required value is missing";
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct ApiErrorCode {
+    value: &'static str,
+}
+
+impl ApiErrorCode {
+    pub const fn new(value: &'static str) -> Self {
+        Self { value }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        self.value
+    }
+}
+
+impl Display for ApiErrorCode {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str(self.value)
+    }
+}
 
 #[derive(Debug)]
 pub enum ApiError {
     Client {
         status: StatusCode,
-        code: &'static str,
+        code: ApiErrorCode,
         message: String,
     },
     Internal {
-        code: &'static str,
+        code: ApiErrorCode,
         source: anyhow::Error,
         location: &'static Location<'static>,
     },
 }
 
 impl ApiError {
-    pub fn client(status: StatusCode, code: &'static str) -> Self {
-        Self::client_msg(status, code, code)
+    pub fn client(status: StatusCode, code: impl Into<ApiErrorCode>) -> Self {
+        let code = code.into();
+        Self::client_msg(status, code, code.as_str())
     }
 
-    pub fn client_msg(status: StatusCode, code: &'static str, message: impl Into<String>) -> Self {
+    pub fn client_msg(
+        status: StatusCode,
+        code: impl Into<ApiErrorCode>,
+        message: impl Into<String>,
+    ) -> Self {
         Self::Client {
             status,
-            code,
+            code: code.into(),
             message: message.into(),
         }
     }
 
     #[track_caller]
-    pub fn internal(code: &'static str, source: impl Into<anyhow::Error>) -> Self {
+    pub fn internal(code: impl Into<ApiErrorCode>, source: impl Into<anyhow::Error>) -> Self {
         Self::Internal {
-            code,
+            code: code.into(),
             source: source.into(),
             location: Location::caller(),
         }
@@ -61,12 +86,12 @@ impl ApiError {
     fn body(&self) -> ErrorBody {
         match self {
             Self::Client { code, message, .. } => ErrorBody {
-                code: (*code).to_string(),
+                code: code.as_str().to_string(),
                 message: message.clone(),
                 trace_id: current_trace_id(),
             },
             Self::Internal { code, .. } => ErrorBody {
-                code: (*code).to_string(),
+                code: code.as_str().to_string(),
                 message: INTERNAL_ERROR_MESSAGE.to_string(),
                 trace_id: current_trace_id(),
             },
@@ -74,11 +99,15 @@ impl ApiError {
     }
 
     fn log(&self, status: StatusCode) {
+        let request_id = current_request_id().unwrap_or_default();
+        let trace_id = current_trace_id().unwrap_or_default();
         match self {
             Self::Client { code, .. } => {
                 tracing::debug!(
                     error.code = %code,
                     http.status_code = status.as_u16(),
+                    request.id = %request_id,
+                    trace.id = %trace_id,
                     "client error response"
                 );
             }
@@ -98,6 +127,8 @@ impl ApiError {
                     error.chain = %chain,
                     error.source = ?source,
                     http.status_code = status.as_u16(),
+                    request.id = %request_id,
+                    trace.id = %trace_id,
                     "internal error response"
                 );
             }
@@ -126,7 +157,7 @@ impl StdError for ApiError {
 impl From<diesel::result::Error> for ApiError {
     #[track_caller]
     fn from(err: diesel::result::Error) -> Self {
-        Self::internal("db_error", err)
+        Self::internal(ApiErrorCode::new("db_error"), err)
     }
 }
 
@@ -139,12 +170,12 @@ impl IntoResponse for ApiError {
 }
 
 pub trait ResultExt<T> {
-    fn internal(self, code: &'static str) -> Result<T, ApiError>;
-    fn client(self, status: StatusCode, code: &'static str) -> Result<T, ApiError>;
+    fn internal(self, code: impl Into<ApiErrorCode>) -> Result<T, ApiError>;
+    fn client(self, status: StatusCode, code: impl Into<ApiErrorCode>) -> Result<T, ApiError>;
     fn client_msg(
         self,
         status: StatusCode,
-        code: &'static str,
+        code: impl Into<ApiErrorCode>,
         message: impl Into<String>,
     ) -> Result<T, ApiError>;
 }
@@ -154,55 +185,63 @@ where
     E: Into<anyhow::Error>,
 {
     #[track_caller]
-    fn internal(self, code: &'static str) -> Result<T, ApiError> {
+    fn internal(self, code: impl Into<ApiErrorCode>) -> Result<T, ApiError> {
+        let code = code.into();
         self.map_err(|err| ApiError::internal(code, err))
     }
 
     #[track_caller]
-    fn client(self, status: StatusCode, code: &'static str) -> Result<T, ApiError> {
-        self.client_msg(status, code, code)
+    fn client(self, status: StatusCode, code: impl Into<ApiErrorCode>) -> Result<T, ApiError> {
+        let code = code.into();
+        self.client_msg(status, code, code.as_str())
     }
 
     #[track_caller]
     fn client_msg(
         self,
         status: StatusCode,
-        code: &'static str,
+        code: impl Into<ApiErrorCode>,
         message: impl Into<String>,
     ) -> Result<T, ApiError> {
+        let code = code.into();
+        let message = message.into();
         self.map_err(|_| ApiError::client_msg(status, code, message))
     }
 }
 
 pub trait OptionExt<T> {
-    fn internal(self, code: &'static str) -> Result<T, ApiError>;
-    fn client(self, status: StatusCode, code: &'static str) -> Result<T, ApiError>;
+    fn internal(self, code: impl Into<ApiErrorCode>) -> Result<T, ApiError>;
+    fn client(self, status: StatusCode, code: impl Into<ApiErrorCode>) -> Result<T, ApiError>;
     fn client_msg(
         self,
         status: StatusCode,
-        code: &'static str,
+        code: impl Into<ApiErrorCode>,
         message: impl Into<String>,
     ) -> Result<T, ApiError>;
 }
 
 impl<T> OptionExt<T> for Option<T> {
     #[track_caller]
-    fn internal(self, code: &'static str) -> Result<T, ApiError> {
+    fn internal(self, code: impl Into<ApiErrorCode>) -> Result<T, ApiError> {
+        let code = code.into();
         self.ok_or_else(|| ApiError::internal(code, anyhow::anyhow!(OPTION_MISSING_MESSAGE)))
     }
 
     #[track_caller]
-    fn client(self, status: StatusCode, code: &'static str) -> Result<T, ApiError> {
-        self.client_msg(status, code, code)
+    fn client(self, status: StatusCode, code: impl Into<ApiErrorCode>) -> Result<T, ApiError> {
+        let code = code.into();
+        self.client_msg(status, code, code.as_str())
     }
 
     #[track_caller]
     fn client_msg(
         self,
         status: StatusCode,
-        code: &'static str,
+        code: impl Into<ApiErrorCode>,
         message: impl Into<String>,
     ) -> Result<T, ApiError> {
+        let code = code.into();
+        let message = message.into();
         self.ok_or_else(|| ApiError::client_msg(status, code, message))
     }
 }
@@ -215,29 +254,26 @@ struct ErrorBody {
     trace_id: Option<String>,
 }
 
-fn current_trace_id() -> Option<String> {
-    let context = tracing::Span::current().context();
-    let span_context = context.span().span_context().clone();
-    span_context
-        .is_valid()
-        .then(|| span_context.trace_id().to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn client_error_uses_configured_status() {
-        let response = ApiError::client(StatusCode::BAD_REQUEST, "invalid_input").into_response();
+        let response =
+            ApiError::client(StatusCode::BAD_REQUEST, ApiErrorCode::new("invalid_input"))
+                .into_response();
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     #[test]
     fn internal_error_uses_internal_server_error_status() {
-        let response =
-            ApiError::internal("db_error", anyhow::anyhow!("connection failed")).into_response();
+        let response = ApiError::internal(
+            ApiErrorCode::new("db_error"),
+            anyhow::anyhow!("connection failed"),
+        )
+        .into_response();
 
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
@@ -245,13 +281,13 @@ mod tests {
     #[test]
     fn option_client_maps_none_to_client_error() {
         let err = Option::<()>::None
-            .client(StatusCode::UNAUTHORIZED, "unauthorized")
+            .client(StatusCode::UNAUTHORIZED, ApiErrorCode::new("unauthorized"))
             .expect_err("none should become a client error");
 
         match err {
             ApiError::Client { status, code, .. } => {
                 assert_eq!(status, StatusCode::UNAUTHORIZED);
-                assert_eq!(code, "unauthorized");
+                assert_eq!(code.as_str(), "unauthorized");
             }
             ApiError::Internal { .. } => panic!("expected client error"),
         }

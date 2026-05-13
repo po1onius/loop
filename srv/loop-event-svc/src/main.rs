@@ -2,7 +2,7 @@ mod config;
 mod http;
 mod service;
 
-use std::sync::Arc;
+use std::{process::ExitCode, sync::Arc};
 
 use crate::{
     config::{CONFIG, InfraConfig},
@@ -27,11 +27,33 @@ use tower_http::{
 use tracing::Level;
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> ExitCode {
     let _observability = init_observability(ObservabilityConfig::new(
         "loop-event-svc",
         env!("CARGO_PKG_VERSION"),
-    ))?;
+    ));
+    let _observability = match _observability {
+        Ok(guard) => guard,
+        Err(err) => {
+            log_bootstrap_error("failed to initialize observability", &err);
+            return ExitCode::FAILURE;
+        }
+    };
+
+    if let Err(err) = run().await {
+        let chain = format_error_chain(&err);
+        tracing::error!(
+            error.chain = %chain,
+            error.source = ?err,
+            "service exited with error"
+        );
+        return ExitCode::FAILURE;
+    }
+
+    ExitCode::SUCCESS
+}
+
+async fn run() -> anyhow::Result<()> {
     let infra_config = InfraConfig::from_env()?;
     let _nacos = run_toml_config(&CONFIG, NacosConfig::from_env()).await?;
     init_pg_pool(&infra_config.pg_conn)?;
@@ -86,4 +108,22 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("http server stopped with error")?;
     Ok(())
+}
+
+fn log_bootstrap_error(message: &str, err: &anyhow::Error) {
+    let chain = format_error_chain(err);
+    let line = serde_json::json!({
+        "level": "ERROR",
+        "message": message,
+        "error.chain": chain,
+        "error.source": format!("{err:?}"),
+    });
+    eprintln!("{line}");
+}
+
+fn format_error_chain(err: &anyhow::Error) -> String {
+    err.chain()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(": ")
 }

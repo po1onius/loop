@@ -35,6 +35,10 @@ const METRIC_BUCKETS: [f64; 11] = [
 static SERVICE_INFO: OnceLock<ServiceInfo> = OnceLock::new();
 static HTTP_METRICS: LazyLock<HttpMetrics> = LazyLock::new(HttpMetrics::default);
 
+tokio::task_local! {
+    static REQUEST_ID: Option<String>;
+}
+
 #[derive(Clone, Debug)]
 pub struct ObservabilityConfig {
     pub service_name: String,
@@ -47,15 +51,17 @@ pub struct ObservabilityConfig {
 
 impl ObservabilityConfig {
     pub fn new(service_name: impl Into<String>, service_version: impl Into<String>) -> Self {
+        let service_name = service_name.into();
         Self {
-            service_name: service_name.into(),
+            log_file: first_non_empty_env(&["LOOP_LOG_FILE"])
+                .unwrap_or_else(|| format!("{service_name}.log")),
+            service_name,
             service_version: service_version.into(),
             environment: std::env::var("LOOP_ENV")
                 .ok()
                 .filter(|value| !value.trim().is_empty())
                 .unwrap_or_else(|| DEFAULT_ENVIRONMENT.to_string()),
-            log_dir: "log".to_string(),
-            log_file: "prefix.log".to_string(),
+            log_dir: first_non_empty_env(&["LOOP_LOG_DIR"]).unwrap_or_else(|| "log".to_string()),
             otlp_endpoint: first_non_empty_env(&[
                 "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
                 "OTEL_EXPORTER_OTLP_ENDPOINT",
@@ -115,6 +121,18 @@ pub async fn extract_trace_context(req: Request, next: Next) -> Response {
     next.run(req).await
 }
 
+pub fn current_request_id() -> Option<String> {
+    REQUEST_ID.try_with(Clone::clone).ok().flatten()
+}
+
+pub fn current_trace_id() -> Option<String> {
+    let context = tracing::Span::current().context();
+    let span_context = context.span().span_context().clone();
+    span_context
+        .is_valid()
+        .then(|| span_context.trace_id().to_string())
+}
+
 pub async fn record_http_metrics(req: Request, next: Next) -> Response {
     let method = req.method().as_str().to_string();
     let path = req
@@ -130,7 +148,8 @@ pub async fn record_http_metrics(req: Request, next: Next) -> Response {
 
     let started_at = Instant::now();
     let _in_flight = InFlightGuard::new();
-    let response = next.run(req).await;
+    // 保存请求级上下文，保证错误转换为响应时也能写入关联 ID。
+    let response = REQUEST_ID.scope(request_id.clone(), next.run(req)).await;
     let status = response.status();
     let response_request_id = response
         .headers()
@@ -138,6 +157,7 @@ pub async fn record_http_metrics(req: Request, next: Next) -> Response {
         .and_then(|value| value.to_str().ok())
         .map(str::to_string);
     let request_id = request_id.or(response_request_id).unwrap_or_default();
+    let trace_id = current_trace_id().unwrap_or_default();
     let elapsed = started_at.elapsed();
     let service_info = service_info();
 
@@ -150,6 +170,7 @@ pub async fn record_http_metrics(req: Request, next: Next) -> Response {
         http.status_code = status.as_u16(),
         http.duration_ms = elapsed.as_secs_f64() * 1000.0,
         request.id = %request_id,
+        trace.id = %trace_id,
         "http request completed"
     );
 
@@ -193,7 +214,7 @@ fn init_tracing_subscriber(
     let file_appender = tracing_appender::rolling::hourly(&config.log_dir, &config.log_file);
     let (file_layer, guard) = tracing_appender::non_blocking(file_appender);
     let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("debug"))
+        .unwrap_or_else(|_| EnvFilter::new("info"))
         .add_directive("h2=off".parse()?)
         .add_directive("nacos_sdk=off".parse()?)
         .add_directive("tower=off".parse()?)
