@@ -5,7 +5,7 @@ create table users (
     username TEXT NOT NULL,
     account TEXT UNIQUE NOT NULL,
     pwd TEXT NOT NULL,
-    role TEXT NOT NULL
+    role TEXT NOT NULL DEFAULT 'user'
 );
 
 CREATE TABLE refresh_tokens (

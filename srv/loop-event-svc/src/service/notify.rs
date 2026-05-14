@@ -15,6 +15,7 @@ pub async fn email_code(
     receiver: &str,
     subject: &str,
     from: &Option<String>,
+    expire_minutes: u64,
 ) -> anyhow::Result<()> {
     let email_cfg = CONFIG
         .load()
@@ -28,7 +29,7 @@ pub async fn email_code(
 
     let mut tera_ctx = Context::new();
     tera_ctx.insert("code", content);
-    tera_ctx.insert("expire_minutes", "2");
+    tera_ctx.insert("expire_minutes", &expire_minutes);
     let html_body = templates
         .render("verify_code_email.html", &tera_ctx)
         .context("failed to render verify code email template")?;

@@ -216,6 +216,9 @@ fn permission_matches(permission: &str, required: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static CONFIG_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn exact_permission_matches() {
@@ -238,6 +241,7 @@ mod tests {
 
     #[test]
     fn role_permission_allows_matching_permission() {
+        let _guard = CONFIG_TEST_LOCK.lock().expect("config test lock poisoned");
         let claims = Claims {
             exp: usize::MAX,
             user_id: 7,
@@ -262,6 +266,7 @@ mod tests {
 
     #[test]
     fn role_permission_denies_missing_permission() {
+        let _guard = CONFIG_TEST_LOCK.lock().expect("config test lock poisoned");
         let claims = Claims {
             exp: usize::MAX,
             user_id: 7,

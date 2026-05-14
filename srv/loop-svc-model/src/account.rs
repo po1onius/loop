@@ -1,5 +1,6 @@
 use crate::DieselConn;
 use chrono::{DateTime, Utc};
+use diesel::OptionalExtension;
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 
@@ -31,6 +32,7 @@ pub struct NewUser<'a> {
     pub username: &'a str,
     pub account: &'a str,
     pub pwd: &'a str,
+    pub role: &'a str,
 }
 
 table! {
@@ -108,9 +110,9 @@ impl User {
     ) -> Result<Option<Self>, diesel::result::Error> {
         users::table
             .filter(users::account.eq(account))
-            .load::<User>(conn)
+            .first::<User>(conn)
             .await
-            .map(|mut v| v.pop())
+            .optional()
     }
 
     pub async fn insert(
@@ -125,22 +127,20 @@ impl User {
 }
 
 impl RefreshTokens {
-    pub async fn select_by_token_hash(
+    pub async fn consume_by_token_hash(
         hash: &str,
         conn: &mut DieselConn,
     ) -> Result<Option<Self>, diesel::result::Error> {
-        refresh_tokens::table
-            .filter(refresh_tokens::token_hash.eq(hash))
-            .load::<Self>(conn)
-            .await
-            .map(|mut v| v.pop())
-    }
-
-    pub async fn expire(id: i64, conn: &mut DieselConn) -> Result<usize, diesel::result::Error> {
-        diesel::update(refresh_tokens::dsl::refresh_tokens.find(id))
-            .set(refresh_tokens::revoked_at.eq(Utc::now()))
-            .execute(conn)
-            .await
+        diesel::update(
+            refresh_tokens::table
+                .filter(refresh_tokens::token_hash.eq(hash))
+                .filter(refresh_tokens::revoked_at.is_null()),
+        )
+        .set(refresh_tokens::revoked_at.eq(Utc::now()))
+        .returning(Self::as_returning())
+        .get_result::<Self>(conn)
+        .await
+        .optional()
     }
 
     pub async fn insert(
@@ -151,27 +151,5 @@ impl RefreshTokens {
             .values(item)
             .execute(conn)
             .await
-    }
-
-    pub async fn select_join_user_by_token(
-        hash: &str,
-        conn: &mut DieselConn,
-    ) -> QueryResult<Option<(RefreshTokens, User)>> {
-        refresh_tokens::table
-            .inner_join(users::table.on(users::user_id.eq(refresh_tokens::user_id)))
-            .filter(refresh_tokens::token_hash.eq(hash))
-            .select((RefreshTokens::as_select(), User::as_select()))
-            .first::<(Self, User)>(conn)
-            .await
-            .map_or_else(
-                |e| {
-                    if e == diesel::NotFound {
-                        Ok(None)
-                    } else {
-                        Err(e)
-                    }
-                },
-                |u| Ok(Some(u)),
-            )
     }
 }

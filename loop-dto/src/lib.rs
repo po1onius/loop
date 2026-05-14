@@ -47,6 +47,4 @@ pub struct VerifyCodeRequest {
 
 #[derive(Debug, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "dto.ts")]
-pub struct VerifyCodeResp {
-    pub code: String,
-}
+pub struct VerifyCodeResp {}

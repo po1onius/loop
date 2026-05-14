@@ -35,12 +35,8 @@ export default function RegisterScreen() {
     setError("");
     setInfo("");
     try {
-      const data = await verifyCode({ account: account.trim() });
-      if (data.code) {
-        setInfo(`验证码已发送（当前验证码：${data.code})`);
-      } else {
-        setInfo("验证码已发送，请查收");
-      }
+      await verifyCode({ account: account.trim() });
+      setInfo("验证码已发送，请查收");
     } catch (e) {
       setError(e instanceof Error ? e.message : "发送验证码失败");
     } finally {
@@ -65,8 +61,8 @@ export default function RegisterScreen() {
       return;
     }
 
-    if (password.length > 16) {
-      setError("密码长度不能超过 16 位");
+    if (password.length > 72) {
+      setError("密码长度不能超过 72 位");
       return;
     }
 
@@ -147,7 +143,7 @@ export default function RegisterScreen() {
 
             <TextInput
               style={styles.input}
-              placeholder="密码(最多16位)"
+              placeholder="密码(最多72位)"
               placeholderTextColor="#8A94A6"
               secureTextEntry
               value={password}
