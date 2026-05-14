@@ -1,18 +1,8 @@
-# Use postgres/example user/password credentials
-
 services:
   db:
     container_name: pgsql
     image: docker.io/postgres
-    # restart: always
-    # set shared memory limit when using docker compose
     shm_size: 128mb
-    # or set shared memory limit when deploy via swarm stack
-    #volumes:
-    #  - type: tmpfs
-    #    target: /dev/shm
-    #    tmpfs:
-    #      size: 134217728 # 128*2^20 bytes = 128Mb
     environment:
       POSTGRES_PASSWORD: wdnmd
       POSTGRES_DB: loop
@@ -55,8 +45,13 @@ services:
       - tempo
 
   tempo:
-    image: docker.io/grafana/tempo:latest
+    # Do not use grafana/tempo:latest here: Docker Hub's latest tag can track
+    # main branch builds and may reject the stable 2.x config schema below.
+    image: docker.io/grafana/tempo:2.10.5
     container_name: loop-tempo
+    # Podman rootless without /etc/subuid maps mounted volumes to the host user.
+    # Run Tempo as container root so the local named volume is writable.
+    user: "0"
     command:
       - -config.file=/etc/tempo.yaml
     volumes:
