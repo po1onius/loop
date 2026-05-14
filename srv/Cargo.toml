@@ -50,7 +50,6 @@ loop-svc-model = { path = "loop-svc-model" }
 loop-infra = { path = "loop-infra" }
 time = "*"
 loop-dto = { path = "../loop-dto" }
-nacos-sdk = "*"
 base64 = "*"
 chrono = { version = "*", features = ["serde"] }
 ipnet = "*"

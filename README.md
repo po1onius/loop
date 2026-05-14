@@ -22,9 +22,138 @@ app目录下，使用`react native` + typescript实现的客户端app
 后端都在srv目录下，具体目录：
 
 1. loop-event-svc: 服务器核心业务“活动”相关实现
-2. loop-chat-svc: 服务器活动对应群聊功能实现
+2. loop-im-svc: 服务器活动对应群聊功能实现
 3. loop-community-svc: 服务器社区板块功能实现
 4. loop-svc-model: 服务器数据结构以及相关数据库操作
+
+## K8s 配置约定
+
+后端不依赖配置中心，部署到 K8s 时使用 `ConfigMap` 管理普通配置，使用 `Secret` 管理敏感配置。`loop-event-svc` 启动时会先读取 `LOOP_CONFIG_FILE` 指向的 TOML 文件，再用环境变量或 `*_FILE` secret 文件覆盖关键字段。
+
+推荐挂载方式：
+
+```text
+ConfigMap -> /etc/loop/config/loop-event-svc.toml
+Secret    -> /etc/loop/secrets/*
+```
+
+核心环境变量：
+
+| 环境变量 | 作用 |
+| --- | --- |
+| `LOOP_CONFIG_FILE` | 普通配置 TOML 文件路径 |
+| `LOOP_HTTP_ADDR` | HTTP 监听地址，本地默认可用 `127.0.0.1:3000` |
+| `LOOP_PG_CONN` / `DATABASE_URL` | PostgreSQL 连接串 |
+| `LOOP_REDIS_CONN` / `REDIS_URL` | Redis 连接串 |
+| `LOOP_JWT_RSA_PRI_KEY_FILE` / `LOOP_JWT_RSA_PRIVATE_KEY_FILE` | JWT RSA 私钥文件 |
+| `LOOP_JWT_RSA_PUB_KEY_FILE` / `LOOP_JWT_RSA_PUBLIC_KEY_FILE` | JWT RSA 公钥文件 |
+| `LOOP_ACCESS_TTL` | 覆盖 access token TTL |
+| `LOOP_REFRESH_TTL` | 覆盖 refresh token TTL |
+| `LOOP_PERM_VER` | 覆盖权限配置版本 |
+| `LOOP_ROLE_PERM_JSON` | 用 JSON 覆盖 `role -> permissions` 映射 |
+| `LOOP_SMTP_TOKEN_FILE` | SMTP token secret 文件 |
+
+普通配置示例：
+
+```toml
+access_ttl = 900
+refresh_ttl = 2592000
+
+[perm]
+perm_ver = 1
+
+[perm.role_perm]
+user = [
+  "event.read",
+  "event.join",
+  "community.post.create",
+]
+
+organizer = [
+  "event.read",
+  "event.join",
+  "event.create",
+  "event.update_own",
+]
+
+admin = [
+  "event.*",
+  "community.*",
+  "user.manage",
+]
+
+[email]
+from = "Loop <no-reply@example.com>"
+
+[email.smtp]
+sender = "smtp-user"
+domain = "smtp.example.com"
+```
+
+JWT 私钥、公钥、数据库密码、SMTP token 等敏感信息不要写入 ConfigMap，使用 K8s Secret 以环境变量或文件方式传入。
+
+## 本地开发
+
+仓库根目录提供 `Makefile` 封装常用命令：
+
+```bash
+make local-init
+cp deploy/local/.env.example deploy/local/.env
+make deps-up
+make dev-event
+```
+
+`make local-init` 会生成本地配置示例和 `deploy/local/secrets/` 目录。需要自行放入 JWT RSA 私钥/公钥文件，并按需调整 `deploy/local/.env` 中的数据库、Redis、配置文件路径。
+
+`.env` 使用 shell `source` 加载，包含 `&`、空格等特殊字符的值需要加引号，例如 PostgreSQL URL。
+
+常用命令：
+
+```bash
+make fmt-check
+make check
+make clippy
+make test-event
+```
+
+## 后端权限模型
+
+访问控制使用稳定的权限点，而不是直接用 URL 字符串作为权限：
+
+1. JWT 只保存 `user_id`、`role`、`perm_ver` 等身份声明
+2. 服务端配置保存 `role -> permissions` 映射
+3. 中间件按当前配置实时判断 role 是否拥有目标权限
+4. 配置缺失、role 不存在、权限不匹配时默认拒绝
+5. `perm_ver` 提升后，旧 token 会被视为过期权限并要求重新登录或刷新
+
+权限配置示例：
+
+```toml
+[perm]
+perm_ver = 1
+
+[perm.role_perm]
+user = [
+  "event.read",
+  "event.join",
+  "community.post.create",
+]
+
+organizer = [
+  "event.read",
+  "event.join",
+  "event.create",
+  "event.update_own",
+]
+
+admin = [
+  "event.*",
+  "community.*",
+  "user.manage",
+]
+```
+
+公开接口在代码中声明，当前包括登录、刷新 token、注册、验证码发送。新增受保护接口时，需要在后端路由权限表中绑定稳定权限点，例如 `event.create`，再通过配置决定哪些 role 拥有该权限。
 
 ### 公用
 

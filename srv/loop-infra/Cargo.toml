@@ -5,21 +5,18 @@ edition.workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
-arc-swap = { workspace = true }
 axum = { workspace = true }
 deadpool-redis = { workspace = true }
 diesel = { workspace = true }
 diesel-async = { workspace = true }
 http = { workspace = true }
 lettre = { workspace = true }
-nacos-sdk = { workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry-otlp = { workspace = true }
 opentelemetry_sdk = { workspace = true }
 serde = { workspace = true }
 tera = { workspace = true }
 tokio = { workspace = true }
-toml = { workspace = true }
 tracing = { workspace = true }
 tracing-appender = { workspace = true }
 tracing-opentelemetry = { workspace = true }

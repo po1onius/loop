@@ -19,13 +19,6 @@ struct Claims {
     pub user_id: i64,
     pub perm_ver: u32,
     pub role: String,
-    pub patch_perm: PatchPerm,
-}
-
-#[derive(Debug, Serialize, Deserialize, Default)]
-struct PatchPerm {
-    pub ban: Vec<String>,
-    pub ext: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -36,7 +29,8 @@ pub struct AppState {
 
 #[derive(Clone)]
 pub struct AuthInfo {
-    user_id: i64,
+    pub user_id: i64,
+    pub role: String,
 }
 
 #[macro_export]
@@ -83,12 +77,15 @@ pub enum ErrorCode {
     PasswordError,
     PasswordHashError,
     PasswordVerifyError,
+    PermissionDenied,
+    PermissionUnconfigured,
     PgPoolGetFailed,
     PgPoolUnavailable,
     RedisError,
     RedisPoolGetFailed,
     RedisPoolUnavailable,
     RefreshTokenExpired,
+    StalePermission,
     TooManyRequests,
     Unauthorized,
     UserNotExist,
@@ -109,12 +106,15 @@ impl ErrorCode {
             Self::PasswordError => "password_error",
             Self::PasswordHashError => "password_hash_error",
             Self::PasswordVerifyError => "password_verify_error",
+            Self::PermissionDenied => "permission_denied",
+            Self::PermissionUnconfigured => "permission_unconfigured",
             Self::PgPoolGetFailed => "pg_pool_get_failed",
             Self::PgPoolUnavailable => "pg_pool_unavailable",
             Self::RedisError => "redis_error",
             Self::RedisPoolGetFailed => "redis_pool_get_failed",
             Self::RedisPoolUnavailable => "redis_pool_unavailable",
             Self::RefreshTokenExpired => "refresh_token_expired",
+            Self::StalePermission => "stale_permission",
             Self::TooManyRequests => "too_many_requests",
             Self::Unauthorized => "unauthorized",
             Self::UserNotExist => "user_not_exist",
@@ -143,12 +143,15 @@ pub mod err_key {
     pub const PASSWORD_ERROR: ErrorCode = ErrorCode::PasswordError;
     pub const PASSWORD_HASH_ERROR: ErrorCode = ErrorCode::PasswordHashError;
     pub const PASSWORD_VERIFY_ERROR: ErrorCode = ErrorCode::PasswordVerifyError;
+    pub const PERMISSION_DENIED: ErrorCode = ErrorCode::PermissionDenied;
+    pub const PERMISSION_UNCONFIGURED: ErrorCode = ErrorCode::PermissionUnconfigured;
     pub const PG_POOL_GET_FAILED: ErrorCode = ErrorCode::PgPoolGetFailed;
     pub const PG_POOL_UNAVAILABLE: ErrorCode = ErrorCode::PgPoolUnavailable;
     pub const REDIS_ERROR: ErrorCode = ErrorCode::RedisError;
     pub const REDIS_POOL_GET_FAILED: ErrorCode = ErrorCode::RedisPoolGetFailed;
     pub const REDIS_POOL_UNAVAILABLE: ErrorCode = ErrorCode::RedisPoolUnavailable;
     pub const REFRESH_TOKEN_EXPIRED: ErrorCode = ErrorCode::RefreshTokenExpired;
+    pub const STALE_PERMISSION: ErrorCode = ErrorCode::StalePermission;
     pub const TOO_MANY_REQUESTS: ErrorCode = ErrorCode::TooManyRequests;
     pub const UNAUTHORIZED: ErrorCode = ErrorCode::Unauthorized;
     pub const USER_NOT_EXIST: ErrorCode = ErrorCode::UserNotExist;

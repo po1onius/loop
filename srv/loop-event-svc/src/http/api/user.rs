@@ -2,7 +2,7 @@ use crate::{
     config::CONFIG,
     db_conn,
     http::{
-        AppState, Claims, HttpErr, OptionExt, PatchPerm, ResultExt,
+        AppState, Claims, HttpErr, OptionExt, ResultExt,
         err_key::*,
         util::{ckb_vc, generate_code, hex_encode},
     },
@@ -109,8 +109,7 @@ fn mint_access_token(
         user_id,
 
         perm_ver: CONFIG.load().perm.perm_ver,
-        role: role,
-        patch_perm: PatchPerm::default(),
+        role,
     };
 
     let token = encode(&Header::new(Algorithm::RS256), &claims, &state.jwt_enc)

@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use tera::Tera;
 
 #[derive(Clone, Serialize, Deserialize, Default, Debug)]
+#[serde(default)]
 pub struct SmtpConfig {
     pub sender: String,
     pub token: String,
@@ -13,6 +14,7 @@ pub struct SmtpConfig {
 }
 
 #[derive(Clone, Serialize, Deserialize, Default, Debug)]
+#[serde(default)]
 pub struct EmailConfig {
     pub from: String,
     pub smtp: SmtpConfig,

@@ -21,16 +21,6 @@ services:
     ports:
       - "6319:6379"
 
-  nacos:
-    image: qingpan/rnacos
-    container_name: rnacos
-    ports:
-      - "8848:8848"
-      - "9848:9848"
-      - "10848:10848"
-    volumes:
-      - rnacos-data:/io
-
   otel-collector:
     image: docker.io/otel/opentelemetry-collector-contrib:latest
     container_name: loop-otel-collector
@@ -117,7 +107,6 @@ services:
 volumes:
   loop-pgdata:
   loop-redis-data:
-  rnacos-data:
   loop-tempo-data:
   loop-loki-data:
   loop-alloy-data:

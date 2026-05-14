@@ -216,7 +216,6 @@ fn init_tracing_subscriber(
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("info"))
         .add_directive("h2=off".parse()?)
-        .add_directive("nacos_sdk=off".parse()?)
         .add_directive("tower=off".parse()?)
         .add_directive("hyper_util=off".parse()?)
         .add_directive("opentelemetry=info".parse()?)

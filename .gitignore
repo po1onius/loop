@@ -1,2 +1,4 @@
 target/
 log/
+deploy/local/.env
+deploy/local/secrets/

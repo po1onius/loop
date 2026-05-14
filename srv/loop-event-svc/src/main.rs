@@ -5,14 +5,13 @@ mod service;
 use std::{process::ExitCode, sync::Arc};
 
 use crate::{
-    config::{CONFIG, InfraConfig},
+    config::{CONFIG, Config, InfraConfig},
     http::{AppState, middleware::auth, route},
 };
 use anyhow::Context;
 use axum::{Router, http::HeaderName, middleware, routing::get};
 use jsonwebtoken::{DecodingKey, EncodingKey};
 use loop_infra::{
-    config::{NacosConfig, run_toml_config},
     db::init_pg_pool,
     observability::{
         ObservabilityConfig, extract_trace_context, init as init_observability, metrics_handler,
@@ -26,10 +25,12 @@ use tower_http::{
 };
 use tracing::Level;
 
+const SERVICE_NAME: &str = "loop-event-svc";
+
 #[tokio::main]
 async fn main() -> ExitCode {
     let _observability = init_observability(ObservabilityConfig::new(
-        "loop-event-svc",
+        SERVICE_NAME,
         env!("CARGO_PKG_VERSION"),
     ));
     let _observability = match _observability {
@@ -55,7 +56,7 @@ async fn main() -> ExitCode {
 
 async fn run() -> anyhow::Result<()> {
     let infra_config = InfraConfig::from_env()?;
-    let _nacos = run_toml_config(&CONFIG, NacosConfig::from_env()).await?;
+    CONFIG.store(Arc::new(Config::from_env()?));
     init_pg_pool(&infra_config.pg_conn)?;
     init_redis_pool(&infra_config.redis_conn)?;
 
@@ -103,7 +104,7 @@ async fn run() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(&http_addr)
         .await
         .context("failed to bind http listener")?;
-    tracing::info!(service.name = "loop-event-svc", %http_addr, "service start");
+    tracing::info!(service.name = SERVICE_NAME, %http_addr, "service start");
     axum::serve(listener, app)
         .await
         .context("http server stopped with error")?;
