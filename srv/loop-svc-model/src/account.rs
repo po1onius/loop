@@ -84,6 +84,16 @@ joinable!(refresh_tokens -> users (user_id));
 allow_tables_to_appear_in_same_query!(users, refresh_tokens);
 
 impl User {
+    #[tracing::instrument(
+        name = "db.user.select_by_user_id",
+        skip_all,
+        fields(
+            db.system = "postgresql",
+            db.operation = "select",
+            db.table = "users",
+            user.id = user_id,
+        )
+    )]
     pub async fn select_by_user_id(
         user_id: i64,
         conn: &mut DieselConn,
@@ -104,6 +114,15 @@ impl User {
             )
     }
 
+    #[tracing::instrument(
+        name = "db.user.select_by_account",
+        skip(account, conn),
+        fields(
+            db.system = "postgresql",
+            db.operation = "select",
+            db.table = "users",
+        )
+    )]
     pub async fn select_by_account(
         account: &str,
         conn: &mut DieselConn,
@@ -115,6 +134,15 @@ impl User {
             .optional()
     }
 
+    #[tracing::instrument(
+        name = "db.user.insert",
+        skip(user, conn),
+        fields(
+            db.system = "postgresql",
+            db.operation = "insert",
+            db.table = "users",
+        )
+    )]
     pub async fn insert(
         user: &NewUser<'_>,
         conn: &mut DieselConn,
@@ -127,6 +155,15 @@ impl User {
 }
 
 impl RefreshTokens {
+    #[tracing::instrument(
+        name = "db.refresh_token.consume",
+        skip(hash, conn),
+        fields(
+            db.system = "postgresql",
+            db.operation = "update",
+            db.table = "refresh_tokens",
+        )
+    )]
     pub async fn consume_by_token_hash(
         hash: &str,
         conn: &mut DieselConn,
@@ -143,6 +180,16 @@ impl RefreshTokens {
         .optional()
     }
 
+    #[tracing::instrument(
+        name = "db.refresh_token.insert",
+        skip(item, conn),
+        fields(
+            db.system = "postgresql",
+            db.operation = "insert",
+            db.table = "refresh_tokens",
+            user.id = item.user_id,
+        )
+    )]
     pub async fn insert(
         item: NewRefreshTokens<'_>,
         conn: &mut DieselConn,

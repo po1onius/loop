@@ -87,10 +87,11 @@ pub fn init(config: ObservabilityConfig) -> anyhow::Result<ObservabilityGuard> {
     let tracer_provider = init_tracer_provider(&config)?;
     let log_guard = init_tracing_subscriber(&config, tracer_provider.clone())?;
     tracing::info!(
-        service.name = %config.service_name,
-        service.version = %config.service_version,
-        deployment.environment = %config.environment,
-        otel.enabled = tracer_provider.is_some(),
+        event = "observability.initialized",
+        service_name = %config.service_name,
+        service_version = %config.service_version,
+        deployment_environment = %config.environment,
+        otel_enabled = tracer_provider.is_some(),
         "observability initialized"
     );
     Ok(ObservabilityGuard {
@@ -159,19 +160,25 @@ pub async fn record_http_metrics(req: Request, next: Next) -> Response {
     let request_id = request_id.or(response_request_id).unwrap_or_default();
     let trace_id = current_trace_id().unwrap_or_default();
     let elapsed = started_at.elapsed();
+    let duration_ms = elapsed.as_secs_f64() * 1000.0;
     let service_info = service_info();
 
     HTTP_METRICS.record(&method, &path, status, elapsed.as_secs_f64());
     tracing::info!(
-        service.name = %service_info.name,
-        deployment.environment = %service_info.environment,
-        http.method = %method,
-        http.route = %path,
-        http.status_code = status.as_u16(),
-        http.duration_ms = elapsed.as_secs_f64() * 1000.0,
-        request.id = %request_id,
-        trace.id = %trace_id,
-        "http request completed"
+        event = "http.request",
+        service_name = %service_info.name,
+        deployment_environment = %service_info.environment,
+        http_method = %method,
+        http_route = %path,
+        http_status = status.as_u16(),
+        duration_ms = duration_ms,
+        request_id = %request_id,
+        trace_id = %trace_id,
+        "HTTP {} {} -> {} {:.2}ms",
+        method,
+        path,
+        status.as_u16(),
+        duration_ms,
     );
 
     response
@@ -233,8 +240,9 @@ fn init_tracing_subscriber(
                 .flatten_event(true)
                 .with_current_span(true)
                 .with_writer(std::io::stdout)
-                .with_file(true)
-                .with_line_number(true),
+                .with_target(false)
+                .with_file(false)
+                .with_line_number(false),
         )
         .with(
             fmt::Layer::new()
@@ -243,8 +251,9 @@ fn init_tracing_subscriber(
                 .with_current_span(true)
                 .with_writer(file_layer)
                 .with_ansi(false)
-                .with_file(true)
-                .with_line_number(true),
+                .with_target(false)
+                .with_file(false)
+                .with_line_number(false),
         )
         .with(otel_layer);
 

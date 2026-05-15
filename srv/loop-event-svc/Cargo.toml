@@ -42,4 +42,3 @@ eventsource-stream = "0.2"
 reqwest-eventsource = "0.6"
 futures-util = { version = "*", default-features = false, features = ["sink", "std"] }
 reqwest = { version = "*", default-features = false, features = ["json", "rustls-tls", "stream"] }
-

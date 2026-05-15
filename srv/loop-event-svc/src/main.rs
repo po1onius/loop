@@ -1,22 +1,16 @@
-mod config;
-mod http;
-mod service;
+pub mod config;
+pub mod http;
+pub mod service;
 
 use std::{process::ExitCode, sync::Arc};
 
-use crate::{
-    config::{CONFIG, Config, InfraConfig},
-    http::{AppState, middleware::auth, route},
-};
 use anyhow::Context;
 use axum::{Router, http::HeaderName, middleware, routing::get};
 use jsonwebtoken::{DecodingKey, EncodingKey};
+use loop_infra::observability::{extract_trace_context, metrics_handler, record_http_metrics};
 use loop_infra::{
     db::init_pg_pool,
-    observability::{
-        ObservabilityConfig, extract_trace_context, init as init_observability, metrics_handler,
-        record_http_metrics,
-    },
+    observability::{ObservabilityConfig, init as init_observability},
     redis::init_redis_pool,
 };
 use tower_http::{
@@ -25,7 +19,12 @@ use tower_http::{
 };
 use tracing::Level;
 
-const SERVICE_NAME: &str = "loop-event-svc";
+use crate::{
+    config::{CONFIG, Config, InfraConfig},
+    http::{AppState, middleware::auth, route},
+};
+
+pub const SERVICE_NAME: &str = "loop-event-svc";
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -44,14 +43,40 @@ async fn main() -> ExitCode {
     if let Err(err) = run().await {
         let chain = format_error_chain(&err);
         tracing::error!(
-            error.chain = %chain,
-            error.source = ?err,
+            event = "service.exit",
+            error_kind = "bootstrap",
+            error_chain = %chain,
+            error_source = ?err,
             "service exited with error"
         );
         return ExitCode::FAILURE;
     }
 
     ExitCode::SUCCESS
+}
+
+pub fn build_app(state: AppState) -> Router {
+    let protected_app = Router::new()
+        .nest("/loop", route(state.clone()))
+        .layer(middleware::from_fn_with_state(state, auth));
+
+    let request_id_header = HeaderName::from_static("x-request-id");
+    Router::new()
+        .route("/metrics", get(metrics_handler))
+        .merge(protected_app)
+        .layer(middleware::from_fn(record_http_metrics))
+        .layer(PropagateRequestIdLayer::new(request_id_header.clone()))
+        .layer(SetRequestIdLayer::new(request_id_header, MakeRequestUuid))
+        .layer(middleware::from_fn(extract_trace_context))
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(
+                    DefaultMakeSpan::new()
+                        .level(Level::INFO)
+                        .include_headers(false),
+                )
+                .on_response(DefaultOnResponse::new().level(Level::DEBUG)),
+        )
 }
 
 async fn run() -> anyhow::Result<()> {
@@ -74,27 +99,7 @@ async fn run() -> anyhow::Result<()> {
     };
     drop(cfg);
 
-    let protected_app = Router::new()
-        .nest("/loop", route(state.clone()))
-        .layer(middleware::from_fn_with_state(state, auth));
-
-    let request_id_header = HeaderName::from_static("x-request-id");
-    let app = Router::new()
-        .route("/metrics", get(metrics_handler))
-        .merge(protected_app)
-        .layer(middleware::from_fn(record_http_metrics))
-        .layer(PropagateRequestIdLayer::new(request_id_header.clone()))
-        .layer(SetRequestIdLayer::new(request_id_header, MakeRequestUuid))
-        .layer(middleware::from_fn(extract_trace_context))
-        .layer(
-            TraceLayer::new_for_http()
-                .make_span_with(
-                    DefaultMakeSpan::new()
-                        .level(Level::INFO)
-                        .include_headers(false),
-                )
-                .on_response(DefaultOnResponse::new().level(Level::INFO)),
-        );
+    let app = build_app(state);
 
     let http_addr = std::env::var("LOOP_HTTP_ADDR")
         .ok()
@@ -104,7 +109,12 @@ async fn run() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(&http_addr)
         .await
         .context("failed to bind http listener")?;
-    tracing::info!(service.name = SERVICE_NAME, %http_addr, "service start");
+    tracing::info!(
+        event = "service.start",
+        service_name = SERVICE_NAME,
+        %http_addr,
+        "service started on {http_addr}"
+    );
     axum::serve(listener, app)
         .await
         .context("http server stopped with error")?;
@@ -116,8 +126,10 @@ fn log_bootstrap_error(message: &str, err: &anyhow::Error) {
     let line = serde_json::json!({
         "level": "ERROR",
         "message": message,
-        "error.chain": chain,
-        "error.source": format!("{err:?}"),
+        "event": "service.bootstrap_error",
+        "error_kind": "bootstrap",
+        "error_chain": chain,
+        "error_source": format!("{err:?}"),
     });
     eprintln!("{line}");
 }

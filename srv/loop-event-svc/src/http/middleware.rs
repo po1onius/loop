@@ -75,12 +75,27 @@ where
     }
 }
 
-#[tracing::instrument(name = "auth.middleware", skip_all)]
+#[tracing::instrument(
+    name = "auth.middleware",
+    skip_all,
+    fields(
+        http.method = tracing::field::Empty,
+        http.route = tracing::field::Empty,
+        user.id = tracing::field::Empty,
+        auth.role = tracing::field::Empty,
+        auth.permission = tracing::field::Empty,
+    )
+)]
 pub async fn auth(
     State(state): State<AppState>,
     mut req: Request,
     next: Next,
 ) -> Result<Response<Body>, HttpErr> {
+    let span = tracing::Span::current();
+    let route = request_path(&req).into_owned();
+    span.record("http.method", tracing::field::display(req.method()));
+    span.record("http.route", tracing::field::display(&route));
+
     let requirement = permission_requirement(&req);
     let claims = req
         .headers()
@@ -104,7 +119,10 @@ pub async fn auth(
 
     match requirement {
         PermissionRequirement::Public => {
+            span.record("auth.permission", tracing::field::display("public"));
             if let Some((_claims, auth_info)) = claims {
+                span.record("user.id", auth_info.user_id);
+                span.record("auth.role", tracing::field::display(&auth_info.role));
                 tracing::debug!(
                     user.id = auth_info.user_id,
                     auth.role = %auth_info.role,
@@ -116,8 +134,11 @@ pub async fn auth(
             }
         }
         PermissionRequirement::Protected(permission) => {
+            span.record("auth.permission", tracing::field::display(permission));
             let (claims, auth_info) = claims.client(StatusCode::UNAUTHORIZED, UNAUTHORIZED)?;
             authorize_claims(&claims, permission)?;
+            span.record("user.id", auth_info.user_id);
+            span.record("auth.role", tracing::field::display(&auth_info.role));
             tracing::debug!(
                 user.id = auth_info.user_id,
                 auth.role = %auth_info.role,
@@ -127,11 +148,15 @@ pub async fn auth(
             req.extensions_mut().insert(auth_info);
         }
         PermissionRequirement::Unconfigured => {
+            span.record("auth.permission", tracing::field::display("unconfigured"));
             let path = request_path(&req);
             tracing::warn!(
-                http.method = req.method().as_str(),
-                http.route = %path,
-                "api permission is not configured"
+                event = "auth.permission_unconfigured",
+                http_method = req.method().as_str(),
+                http_route = %path,
+                "API permission is not configured for {} {}",
+                req.method(),
+                path,
             );
             return Err(HttpErr::client(
                 StatusCode::FORBIDDEN,
@@ -169,14 +194,26 @@ fn request_path(req: &Request) -> std::borrow::Cow<'_, str> {
         .unwrap_or_else(|| std::borrow::Cow::Borrowed(req.uri().path()))
 }
 
+#[tracing::instrument(
+    name = "auth.authorize_claims",
+    skip_all,
+    fields(
+        user.id = claims.user_id,
+        auth.role = %claims.role,
+        auth.permission = %permission,
+        token.perm_ver = claims.perm_ver,
+    )
+)]
 fn authorize_claims(claims: &Claims, permission: &str) -> Result<(), HttpErr> {
     let cfg = CONFIG.load();
     if claims.perm_ver < cfg.perm.perm_ver {
         tracing::warn!(
-            user.id = claims.user_id,
-            token.perm_ver = claims.perm_ver,
-            config.perm_ver = cfg.perm.perm_ver,
-            "token permission version is stale"
+            event = "auth.stale_permission",
+            user_id = claims.user_id,
+            token_perm_ver = claims.perm_ver,
+            config_perm_ver = cfg.perm.perm_ver,
+            "token permission version is stale for user {}",
+            claims.user_id,
         );
         return Err(HttpErr::client(StatusCode::UNAUTHORIZED, STALE_PERMISSION));
     }
@@ -191,10 +228,14 @@ fn authorize_claims(claims: &Claims, permission: &str) -> Result<(), HttpErr> {
     }
 
     tracing::warn!(
-        user.id = claims.user_id,
-        auth.role = %claims.role,
-        auth.permission = permission,
-        "permission denied"
+        event = "auth.permission_denied",
+        user_id = claims.user_id,
+        auth_role = %claims.role,
+        auth_permission = permission,
+        "permission denied for user {} role {} permission {}",
+        claims.user_id,
+        claims.role,
+        permission,
     );
     Err(HttpErr::client(StatusCode::FORBIDDEN, PERMISSION_DENIED))
 }

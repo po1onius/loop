@@ -9,7 +9,11 @@ static EMAIL_TEMPLATES: LazyLock<Result<Tera, tera::Error>> = LazyLock::new(|| {
     loop_infra::mail::load_templates(&pattern)
 });
 
-#[tracing::instrument(name = "notify.email_code", skip_all)]
+#[tracing::instrument(
+    name = "notify.email_code",
+    skip_all,
+    fields(email.subject = %subject, email.expire_minutes = expire_minutes)
+)]
 pub async fn email_code(
     content: &str,
     receiver: &str,

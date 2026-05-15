@@ -33,7 +33,11 @@ const DEFAULT_USER_ROLE: &str = "user";
 const VERIFY_CODE_TTL_SECONDS: u64 = 120;
 const VERIFY_CODE_EXPIRE_MINUTES: u64 = VERIFY_CODE_TTL_SECONDS / 60;
 
-#[tracing::instrument(name = "user.login", skip_all)]
+#[tracing::instrument(
+    name = "user.login",
+    skip_all,
+    fields(user.id = tracing::field::Empty, auth.role = tracing::field::Empty)
+)]
 pub async fn login(
     State(state): State<AppState>,
     Json(req): Json<LoginRequest>,
@@ -43,6 +47,9 @@ pub async fn login(
         .await
         .internal(DB_ERROR)?
         .client(StatusCode::BAD_REQUEST, USER_NOT_EXIST)?;
+    let span = tracing::Span::current();
+    span.record("user.id", cur_user.user_id);
+    span.record("auth.role", tracing::field::display(&cur_user.role));
 
     verify_password(req.password, cur_user.pwd.clone())
         .await?
@@ -60,7 +67,11 @@ pub async fn login(
     }))
 }
 
-#[tracing::instrument(name = "user.refresh", skip_all)]
+#[tracing::instrument(
+    name = "user.refresh",
+    skip_all,
+    fields(user.id = tracing::field::Empty, auth.role = tracing::field::Empty)
+)]
 pub async fn refresh(
     State(state): State<AppState>,
     Json(req): Json<RefreshTokenRequest>,
@@ -80,11 +91,13 @@ pub async fn refresh(
                     REFRESH_TOKEN_EXPIRED,
                 ));
             }
+            tracing::Span::current().record("user.id", refresh_token.user_id);
 
             let user = User::select_by_user_id(refresh_token.user_id, conn)
                 .await
                 .internal(DB_ERROR)?
                 .client(StatusCode::BAD_REQUEST, USER_NOT_EXIST)?;
+            tracing::Span::current().record("auth.role", tracing::field::display(&user.role));
 
             let (access_token, access_exp) =
                 mint_access_token(&state, refresh_token.user_id, user.role)?;
@@ -100,6 +113,11 @@ pub async fn refresh(
         .await
 }
 
+#[tracing::instrument(
+    name = "user.access_token.mint",
+    skip_all,
+    fields(user.id = user_id, auth.role = %role)
+)]
 fn mint_access_token(
     state: &AppState,
     user_id: i64,
@@ -120,7 +138,11 @@ fn mint_access_token(
     Ok((token, CONFIG.load().access_ttl))
 }
 
-#[tracing::instrument(name = "user.refresh_token.mint", skip_all)]
+#[tracing::instrument(
+    name = "user.refresh_token.mint",
+    skip_all,
+    fields(user.id = user_id)
+)]
 async fn mint_refresh_token(user_id: i64, conn: &mut DieselConn) -> Result<(String, i64), HttpErr> {
     let ttl = Duration::seconds(CONFIG.load().refresh_ttl);
     let expires_at = Utc::now() + ttl;
@@ -206,7 +228,12 @@ pub async fn register(Json(req): Json<RegisterRequest>) -> Result<(), HttpErr> {
         .await
         .map_err(map_user_insert_error)?;
     if let Err(err) = redis.del::<_, ()>(&vck).await {
-        tracing::warn!(error = ?err, "failed to delete used verify code");
+        tracing::warn!(
+            event = "verify_code.cleanup_failed",
+            error_kind = "redis",
+            error_source = ?err,
+            "failed to delete used verify code"
+        );
     }
     Ok(())
 }
@@ -247,7 +274,12 @@ pub async fn verify_code(
     .await
     {
         if let Err(del_err) = redis.del::<_, ()>(&vck).await {
-            tracing::warn!(error = ?del_err, "failed to delete verify code after email failure");
+            tracing::warn!(
+                event = "verify_code.cleanup_failed",
+                error_kind = "redis",
+                error_source = ?del_err,
+                "failed to delete verify code after email failure"
+            );
         }
         return Err(HttpErr::internal(EMAIL_SEND_ERROR, err));
     }

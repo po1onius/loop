@@ -102,14 +102,39 @@ impl ApiError {
         let request_id = current_request_id().unwrap_or_default();
         let trace_id = current_trace_id().unwrap_or_default();
         match self {
-            Self::Client { code, .. } => {
-                tracing::debug!(
-                    error.code = %code,
-                    http.status_code = status.as_u16(),
-                    request.id = %request_id,
-                    trace.id = %trace_id,
-                    "client error response"
-                );
+            Self::Client { code, message, .. } => {
+                if matches!(
+                    status,
+                    StatusCode::UNAUTHORIZED
+                        | StatusCode::FORBIDDEN
+                        | StatusCode::TOO_MANY_REQUESTS
+                ) {
+                    tracing::warn!(
+                        event = "http.error_response",
+                        error_kind = "client",
+                        error_code = %code,
+                        error_message = %message,
+                        http_status = status.as_u16(),
+                        request_id = %request_id,
+                        trace_id = %trace_id,
+                        "HTTP client error response {} {}",
+                        status.as_u16(),
+                        code,
+                    );
+                } else {
+                    tracing::info!(
+                        event = "http.error_response",
+                        error_kind = "client",
+                        error_code = %code,
+                        error_message = %message,
+                        http_status = status.as_u16(),
+                        request_id = %request_id,
+                        trace_id = %trace_id,
+                        "HTTP client error response {} {}",
+                        status.as_u16(),
+                        code,
+                    );
+                }
             }
             Self::Internal {
                 code,
@@ -122,14 +147,18 @@ impl ApiError {
                     .collect::<Vec<_>>()
                     .join(": ");
                 tracing::error!(
-                    error.code = %code,
-                    error.location = %location,
-                    error.chain = %chain,
-                    error.source = ?source,
-                    http.status_code = status.as_u16(),
-                    request.id = %request_id,
-                    trace.id = %trace_id,
-                    "internal error response"
+                    event = "http.error_response",
+                    error_kind = "internal",
+                    error_code = %code,
+                    error_location = %location,
+                    error_chain = %chain,
+                    error_source = ?source,
+                    http_status = status.as_u16(),
+                    request_id = %request_id,
+                    trace_id = %trace_id,
+                    "HTTP internal error response {} {}",
+                    status.as_u16(),
+                    code,
                 );
             }
         }

@@ -32,13 +32,15 @@ loki.process "loop_json" {
   // stay as structured metadata to avoid exploding Loki stream cardinality.
   stage.json {
     expressions = {
-      level            = "level",
-      message          = "message",
-      trace_id         = "\"trace.id\"",
-      request_id       = "\"request.id\"",
-      http_route       = "\"http.route\"",
-      http_status_code = "\"http.status_code\"",
-      error_code       = "\"error.code\"",
+      level       = "level",
+      event       = "event",
+      message     = "message",
+      trace_id    = "trace_id",
+      request_id  = "request_id",
+      http_route  = "http_route",
+      http_status = "http_status",
+      duration_ms = "duration_ms",
+      error_code  = "error_code",
     }
     drop_malformed = false
   }
@@ -46,17 +48,19 @@ loki.process "loop_json" {
   stage.labels {
     values = {
       level = "level",
+      event = "event",
     }
   }
 
   stage.structured_metadata {
     values = {
-      message          = "message",
-      trace_id         = "trace_id",
-      request_id       = "request_id",
-      http_route       = "http_route",
-      http_status_code = "http_status_code",
-      error_code       = "error_code",
+      message     = "message",
+      trace_id    = "trace_id",
+      request_id  = "request_id",
+      http_route  = "http_route",
+      http_status = "http_status",
+      duration_ms = "duration_ms",
+      error_code  = "error_code",
     }
   }
 }
@@ -66,4 +70,3 @@ loki.write "local" {
     url = "http://loki:3100/loki/api/v1/push"
   }
 }
-

@@ -43,6 +43,7 @@ pub static CONFIG: LazyLock<ArcSwap<Config>> =
     LazyLock::new(|| ArcSwap::new(Arc::new(Config::default())));
 
 impl Config {
+    #[tracing::instrument(name = "config.service.load", skip_all)]
     pub fn from_env() -> anyhow::Result<Self> {
         let mut cfg = load_base_config()?;
         apply_env_overrides(&mut cfg)?;
@@ -50,6 +51,7 @@ impl Config {
         Ok(cfg)
     }
 
+    #[tracing::instrument(name = "config.service.validate", skip_all)]
     fn validate(&self) -> anyhow::Result<()> {
         ensure_non_empty("crypto.jwt_rsa_pri_key", &self.crypto.jwt_rsa_pri_key)?;
         ensure_non_empty("crypto.jwt_rsa_pub_key", &self.crypto.jwt_rsa_pub_key)?;
@@ -77,6 +79,7 @@ pub struct InfraConfig {
 }
 
 impl InfraConfig {
+    #[tracing::instrument(name = "config.infra.load", skip_all)]
     pub fn from_env() -> anyhow::Result<Self> {
         Ok(Self {
             pg_conn: first_non_empty_env(&["LOOP_PG_CONN", "DATABASE_URL"])?,
@@ -85,17 +88,33 @@ impl InfraConfig {
     }
 }
 
+#[tracing::instrument(
+    name = "config.base.load",
+    skip_all,
+    fields(config.file = tracing::field::Empty)
+)]
 fn load_base_config() -> anyhow::Result<Config> {
     let Some(path) = first_non_empty_env_opt(&["LOOP_CONFIG_FILE"]) else {
-        tracing::info!("LOOP_CONFIG_FILE is not set; loading service config from environment");
+        tracing::info!(
+            event = "config.base.load",
+            config_source = "environment",
+            "loading service config from environment"
+        );
         return Ok(Config::default());
     };
-    tracing::info!(config.file = %path, "loading service config file");
+    tracing::Span::current().record("config.file", tracing::field::display(&path));
+    tracing::info!(
+        event = "config.base.load",
+        config_source = "file",
+        config_file = %path,
+        "loading service config file {path}"
+    );
     let content =
         fs::read_to_string(&path).with_context(|| format!("failed to read config file: {path}"))?;
     toml::from_str(&content).with_context(|| format!("failed to parse config file: {path}"))
 }
 
+#[tracing::instrument(name = "config.env.apply", skip_all)]
 fn apply_env_overrides(cfg: &mut Config) -> anyhow::Result<()> {
     if let Some(value) = value_from_env_or_file(
         &["LOOP_JWT_RSA_PRI_KEY", "LOOP_JWT_RSA_PRIVATE_KEY"],
@@ -127,6 +146,7 @@ fn apply_env_overrides(cfg: &mut Config) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[tracing::instrument(name = "config.email_env.apply", skip_all)]
 fn apply_email_env_overrides(cfg: &mut Config) -> anyhow::Result<()> {
     let email_env_keys = [
         "LOOP_EMAIL_FROM",
@@ -176,6 +196,11 @@ fn value_from_env_or_file(
     }
 }
 
+#[tracing::instrument(
+    name = "config.secret_file.read",
+    skip_all,
+    fields(config.file = %path)
+)]
 fn read_non_empty_file(path: &str) -> anyhow::Result<String> {
     let value =
         fs::read_to_string(path).with_context(|| format!("failed to read secret file: {path}"))?;

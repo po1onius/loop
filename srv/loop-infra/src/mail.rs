@@ -20,10 +20,20 @@ pub struct EmailConfig {
     pub smtp: SmtpConfig,
 }
 
+#[tracing::instrument(
+    name = "mail.templates.load",
+    skip_all,
+    fields(template.pattern = %pattern)
+)]
 pub fn load_templates(pattern: &str) -> Result<Tera, tera::Error> {
     Tera::new(pattern)
 }
 
+#[tracing::instrument(
+    name = "mail.smtp.send_html",
+    skip_all,
+    fields(email.subject = %subject, smtp.domain = %cfg.smtp.domain)
+)]
 pub async fn send_html_email(
     cfg: &EmailConfig,
     receiver: &str,

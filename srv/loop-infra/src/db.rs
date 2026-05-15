@@ -9,6 +9,11 @@ pub type PgPool = Pool<AsyncPgConnection>;
 
 pub static PG_POOL: OnceLock<PgPool> = OnceLock::new();
 
+#[tracing::instrument(
+    name = "infra.postgres.pool.build",
+    skip_all,
+    fields(db.system = "postgresql")
+)]
 pub fn build_pg_pool(conn_cfg: &str) -> anyhow::Result<PgPool> {
     let config = AsyncDieselConnectionManager::<AsyncPgConnection>::new(conn_cfg);
     Pool::builder(config)
@@ -16,6 +21,11 @@ pub fn build_pg_pool(conn_cfg: &str) -> anyhow::Result<PgPool> {
         .context("failed to build postgres connection pool")
 }
 
+#[tracing::instrument(
+    name = "infra.postgres.pool.init",
+    skip_all,
+    fields(db.system = "postgresql")
+)]
 pub fn init_pg_pool(conn_cfg: &str) -> anyhow::Result<()> {
     let pool = build_pg_pool(conn_cfg)?;
     PG_POOL
