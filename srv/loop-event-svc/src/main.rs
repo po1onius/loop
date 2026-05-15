@@ -26,7 +26,7 @@ use tower_http::{
 use tracing::Level;
 
 use crate::{
-    config::{CONFIG, Config, InfraConfig},
+    config::{Config, InfraConfig, config, init_config},
     http::{
         AppState,
         middleware::{AuthMiddlewareState, AuthPolicy, auth},
@@ -109,11 +109,11 @@ fn should_enable_cors() -> bool {
 
 async fn run() -> anyhow::Result<()> {
     let infra_config = InfraConfig::from_env()?;
-    CONFIG.store(Arc::new(Config::from_env()?));
+    init_config(Config::from_env()?)?;
     init_pg_pool(&infra_config.pg_conn)?;
     init_redis_pool(&infra_config.redis_conn)?;
 
-    let cfg = CONFIG.load();
+    let cfg = config();
 
     let state = AppState {
         jwt_dec: Arc::new(
@@ -125,7 +125,6 @@ async fn run() -> anyhow::Result<()> {
                 .context("failed to parse jwt private key")?,
         ),
     };
-    drop(cfg);
 
     let app = build_app(state);
 

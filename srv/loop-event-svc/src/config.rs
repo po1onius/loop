@@ -1,12 +1,7 @@
 use anyhow::{Context, bail};
-use arc_swap::ArcSwap;
 use loop_infra::mail::{EmailConfig, SmtpConfig};
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::HashMap,
-    fs,
-    sync::{Arc, LazyLock},
-};
+use std::{collections::HashMap, fs, sync::OnceLock};
 
 #[derive(Serialize, Deserialize, Default, Debug)]
 #[serde(default)]
@@ -39,8 +34,19 @@ pub struct Config {
     pub perm: Perm,
 }
 
-pub static CONFIG: LazyLock<ArcSwap<Config>> =
-    LazyLock::new(|| ArcSwap::new(Arc::new(Config::default())));
+static CONFIG: OnceLock<Config> = OnceLock::new();
+
+pub fn init_config(cfg: Config) -> anyhow::Result<()> {
+    CONFIG
+        .set(cfg)
+        .map_err(|_| anyhow::anyhow!("service config has already been initialized"))
+}
+
+pub fn config() -> &'static Config {
+    CONFIG
+        .get()
+        .expect("service config is not initialized; call init_config before using config")
+}
 
 impl Config {
     #[tracing::instrument(name = "config.service.load", skip_all)]

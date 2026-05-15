@@ -33,7 +33,6 @@ time = { workspace = true }
 loop-dto = { workspace = true }
 base64 = { workspace = true }
 chrono = { workspace = true }
-arc-swap = { workspace = true }
 paste = { workspace = true }
 tera = { workspace = true }
 

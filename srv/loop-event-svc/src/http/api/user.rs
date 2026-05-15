@@ -1,5 +1,5 @@
 use crate::{
-    config::CONFIG,
+    config::config,
     db_conn,
     http::{
         AppRoutes, AppState, Claims, HttpErr, OptionExt, ResultExt,
@@ -123,19 +123,20 @@ fn mint_access_token(
     user_id: i64,
     role: String,
 ) -> Result<(String, i64), HttpErr> {
-    let exp = Utc::now().timestamp() + CONFIG.load().access_ttl;
+    let cfg = config();
+    let exp = Utc::now().timestamp() + cfg.access_ttl;
     let claims = Claims {
         exp: exp as usize,
         user_id,
 
-        perm_ver: CONFIG.load().perm.perm_ver,
+        perm_ver: cfg.perm.perm_ver,
         role,
     };
 
     let token = encode(&Header::new(Algorithm::RS256), &claims, &state.jwt_enc)
         .internal(JWT_ENCODE_ERROR)?;
 
-    Ok((token, CONFIG.load().access_ttl))
+    Ok((token, cfg.access_ttl))
 }
 
 #[tracing::instrument(
@@ -144,7 +145,8 @@ fn mint_access_token(
     fields(user.id = user_id)
 )]
 async fn mint_refresh_token(user_id: i64, conn: &mut DieselConn) -> Result<(String, i64), HttpErr> {
-    let ttl = Duration::seconds(CONFIG.load().refresh_ttl);
+    let refresh_ttl = config().refresh_ttl;
+    let ttl = Duration::seconds(refresh_ttl);
     let expires_at = Utc::now() + ttl;
 
     let raw = generate_refresh_token();
@@ -162,7 +164,7 @@ async fn mint_refresh_token(user_id: i64, conn: &mut DieselConn) -> Result<(Stri
 
     RefreshTokens::insert(new, conn).await.internal(DB_ERROR)?;
 
-    Ok((raw, CONFIG.load().refresh_ttl))
+    Ok((raw, refresh_ttl))
 }
 
 #[tracing::instrument(name = "user.password.verify", skip_all)]

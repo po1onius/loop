@@ -2,7 +2,7 @@ use anyhow::{Context as AnyhowContext, anyhow};
 use std::sync::LazyLock;
 use tera::{Context, Tera};
 
-use crate::config::CONFIG;
+use crate::config::config;
 
 static EMAIL_TEMPLATES: LazyLock<Result<Tera, tera::Error>> = LazyLock::new(|| {
     let pattern = format!("{}/../static/templates/**/*", env!("CARGO_MANIFEST_DIR"));
@@ -21,8 +21,7 @@ pub async fn email_code(
     from: &Option<String>,
     expire_minutes: u64,
 ) -> anyhow::Result<()> {
-    let email_cfg = CONFIG
-        .load()
+    let email_cfg = config()
         .email
         .clone()
         .ok_or_else(|| anyhow!("email config is missing"))?;

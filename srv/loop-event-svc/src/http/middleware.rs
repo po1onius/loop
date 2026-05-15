@@ -1,5 +1,5 @@
 use crate::{
-    config::CONFIG,
+    config::config,
     http::{AppState, AuthInfo, Claims, HttpErr, OptionExt, err_key::*},
 };
 use axum::{
@@ -215,7 +215,14 @@ fn request_path(req: &Request) -> std::borrow::Cow<'_, str> {
     )
 )]
 fn authorize_claims(claims: &Claims, permission: &str) -> Result<(), HttpErr> {
-    let cfg = CONFIG.load();
+    authorize_claims_with_config(claims, permission, config())
+}
+
+fn authorize_claims_with_config(
+    claims: &Claims,
+    permission: &str,
+    cfg: &crate::config::Config,
+) -> Result<(), HttpErr> {
     if claims.perm_ver < cfg.perm.perm_ver {
         tracing::warn!(
             event = "auth.stale_permission",
@@ -287,9 +294,6 @@ fn permission_matches(permission: &str, required: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    static CONFIG_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn exact_permission_matches() {
@@ -341,14 +345,13 @@ mod tests {
 
     #[test]
     fn role_permission_allows_matching_permission() {
-        let _guard = CONFIG_TEST_LOCK.lock().expect("config test lock poisoned");
         let claims = Claims {
             exp: usize::MAX,
             user_id: 7,
             perm_ver: 1,
             role: "organizer".to_string(),
         };
-        CONFIG.store(std::sync::Arc::new(crate::config::Config {
+        let cfg = crate::config::Config {
             access_ttl: 900,
             refresh_ttl: 3600,
             perm: crate::config::Perm {
@@ -359,21 +362,21 @@ mod tests {
                 )]),
             },
             ..Default::default()
-        }));
+        };
 
-        authorize_claims(&claims, "event.create").expect("permission should be allowed");
+        authorize_claims_with_config(&claims, "event.create", &cfg)
+            .expect("permission should be allowed");
     }
 
     #[test]
     fn role_permission_denies_missing_permission() {
-        let _guard = CONFIG_TEST_LOCK.lock().expect("config test lock poisoned");
         let claims = Claims {
             exp: usize::MAX,
             user_id: 7,
             perm_ver: 1,
             role: "user".to_string(),
         };
-        CONFIG.store(std::sync::Arc::new(crate::config::Config {
+        let cfg = crate::config::Config {
             access_ttl: 900,
             refresh_ttl: 3600,
             perm: crate::config::Perm {
@@ -384,9 +387,10 @@ mod tests {
                 )]),
             },
             ..Default::default()
-        }));
+        };
 
-        let err = authorize_claims(&claims, "event.delete").expect_err("permission should deny");
+        let err = authorize_claims_with_config(&claims, "event.delete", &cfg)
+            .expect_err("permission should deny");
         match err {
             HttpErr::Client { status, code, .. } => {
                 assert_eq!(status, StatusCode::FORBIDDEN);
