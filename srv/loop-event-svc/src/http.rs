@@ -3,7 +3,7 @@ pub mod middleware;
 mod util;
 
 use crate::http::{
-    api::user,
+    api::{event, user},
     middleware::{ApiRule, RouteAccess},
 };
 use axum::{Router, routing::MethodRouter};
@@ -56,6 +56,12 @@ impl AppRoutes {
         self.router = self.router.nest(path, routes.router);
         self.rules
             .extend(routes.rules.into_iter().map(|rule| rule.with_prefix(path)));
+        self
+    }
+
+    pub fn merge(mut self, routes: AppRoutes) -> Self {
+        self.router = self.router.merge(routes.router);
+        self.rules.extend(routes.rules);
         self
     }
 
@@ -157,7 +163,12 @@ macro_rules! db_conn {
 }
 
 pub fn route(state: AppState) -> AppRoutes {
-    AppRoutes::empty().nest("/loop", user::route(state))
+    AppRoutes::empty().nest(
+        "/loop",
+        AppRoutes::empty()
+            .merge(user::route(state.clone()))
+            .merge(event::route(state)),
+    )
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]

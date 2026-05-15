@@ -2,6 +2,171 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 #[derive(Debug, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "dto.ts")]
+pub enum EventStatus {
+    Draft,
+    Published,
+    Cancelled,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "dto.ts")]
+pub enum EventTextColor {
+    Accent,
+    Warning,
+    Success,
+    Muted,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[ts(export_to = "dto.ts")]
+pub enum EventTextMark {
+    Bold,
+    Italic,
+    Underline,
+    Color { value: EventTextColor },
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[ts(export_to = "dto.ts")]
+pub enum EventInlineNode {
+    Text {
+        text: String,
+        #[serde(default)]
+        marks: Vec<EventTextMark>,
+    },
+    Hashtag {
+        text: String,
+        tag_id: Option<String>,
+    },
+    Mention {
+        user_id: String,
+        label: String,
+    },
+    Link {
+        text: String,
+        url: String,
+    },
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export_to = "dto.ts")]
+pub struct EventContentImage {
+    pub asset_id: String,
+    pub width: i32,
+    pub height: i32,
+    pub alt: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[serde(tag = "feature_type", rename_all = "snake_case")]
+#[ts(export_to = "dto.ts")]
+pub enum EventFeatureBlock {
+    Schedule {
+        title: String,
+        items: Vec<String>,
+    },
+    Location {
+        title: String,
+        address: Option<String>,
+    },
+    Notice {
+        title: String,
+        items: Vec<String>,
+    },
+    Ticket {
+        title: String,
+        description: String,
+    },
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[ts(export_to = "dto.ts")]
+pub enum EventContentBlock {
+    Heading {
+        id: String,
+        level: i32,
+        children: Vec<EventInlineNode>,
+    },
+    Paragraph {
+        id: String,
+        children: Vec<EventInlineNode>,
+    },
+    Quote {
+        id: String,
+        children: Vec<EventInlineNode>,
+    },
+    Image {
+        id: String,
+        item: EventContentImage,
+        caption: Option<String>,
+    },
+    ImageGrid {
+        id: String,
+        items: Vec<EventContentImage>,
+    },
+    Divider {
+        id: String,
+    },
+    Feature {
+        id: String,
+        feature: EventFeatureBlock,
+    },
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export_to = "dto.ts")]
+pub struct EventContentDoc {
+    pub schema_version: u16,
+    pub blocks: Vec<EventContentBlock>,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export_to = "dto.ts")]
+pub struct CreateEventRequest {
+    pub title: String,
+    pub content: EventContentDoc,
+    pub start_at: Option<String>,
+    pub end_at: Option<String>,
+    pub location_name: Option<String>,
+    pub location_address: Option<String>,
+    pub capacity: Option<i32>,
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export_to = "dto.ts")]
+pub struct EventResp {
+    pub event_id: String,
+    pub creator_id: String,
+    pub title: String,
+    pub status: EventStatus,
+    pub content: EventContentDoc,
+    pub summary: String,
+    pub cover_asset_id: Option<String>,
+    pub start_at: Option<String>,
+    pub end_at: Option<String>,
+    pub location_name: Option<String>,
+    pub location_address: Option<String>,
+    pub capacity: Option<i32>,
+    pub tags: Vec<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export_to = "dto.ts")]
+pub struct ListEventsResp {
+    pub items: Vec<EventResp>,
+    pub next_offset: Option<i32>,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
 #[ts(export_to = "dto.ts")]
 pub struct LoginRequest {
     pub account: String,

@@ -126,7 +126,7 @@ local-init:
 			'perm_ver = 1' \
 			'' \
 			'[perm.role_perm]' \
-			'user = ["event.read", "event.join", "community.post.create"]' \
+			'user = ["event.read", "event.join", "event.create", "community.post.create"]' \
 			'organizer = ["event.read", "event.join", "event.create", "event.update_own"]' \
 			'admin = ["*"]' \
 			> deploy/local/loop-event-svc.example.toml; \

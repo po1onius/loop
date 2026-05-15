@@ -1,6 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { router } from "expo-router";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FlatList,
+  Pressable,
   StyleSheet,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
@@ -11,6 +13,8 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { ThemedText } from "@/components/themed-text";
 import { ThemedView } from "@/components/themed-view";
+import type { EventResp } from "@/lib/dto";
+import { listEvents } from "@/lib/event-api";
 
 type CarouselItem = {
   id: string;
@@ -28,35 +32,73 @@ type ListItem = {
 const CAROUSEL_ITEMS: CarouselItem[] = [
   {
     id: "1",
-    title: "晨间推荐",
-    subtitle: "左右滑动查看更多内容",
+    title: "本周活动",
+    subtitle: "发现附近正在招募的兴趣活动",
     color: "#3F8EFC",
   },
   {
     id: "2",
     title: "今日精选",
-    subtitle: "自动轮播每 3.5 秒切换",
+    subtitle: "技术交流、摄影外拍和城市徒步",
     color: "#12B886",
   },
   {
     id: "3",
-    title: "热点速览",
-    subtitle: "支持手势切换卡片",
+    title: "热门主题",
+    subtitle: "按地点、时间和兴趣快速筛选",
     color: "#F08C00",
   },
 ];
 
-const LIST_ITEMS: ListItem[] = Array.from({ length: 24 }, (_, index) => ({
-  id: String(index + 1),
-  title: `列表项 ${index + 1}`,
-  description: "这里是滚动列表的内容描述，可按业务替换。",
-}));
+const FALLBACK_ITEMS: ListItem[] = [
+  {
+    id: "1",
+    title: "Web3 技术交流会",
+    description: "周六 14:00 · 南山科技园 · 32 人已报名",
+  },
+  {
+    id: "2",
+    title: "城市摄影外拍",
+    description: "周日 16:30 · 滨海步道 · 18 人已报名",
+  },
+  {
+    id: "3",
+    title: "手作烘焙体验",
+    description: "下周三 19:00 · 福田中心区 · 12 人已报名",
+  },
+  {
+    id: "4",
+    title: "独立游戏试玩夜",
+    description: "下周五 20:00 · 创意园 · 24 人已报名",
+  },
+  {
+    id: "5",
+    title: "户外飞盘新手局",
+    description: "周六 09:30 · 深圳湾公园 · 40 人已报名",
+  },
+];
 
 export default function HomeScreen() {
   const { width } = useWindowDimensions();
   const carouselRef = useRef<FlatList<CarouselItem>>(null);
   const [activeIndex, setActiveIndex] = useState(0);
+  const [events, setEvents] = useState<EventResp[]>([]);
+  const [loadingEvents, setLoadingEvents] = useState(false);
+  const [eventsError, setEventsError] = useState("");
   const slideWidth = Math.max(width - 32, 1);
+
+  const loadEvents = useCallback(async () => {
+    setLoadingEvents(true);
+    setEventsError("");
+    try {
+      const resp = await listEvents();
+      setEvents(resp.items);
+    } catch (e) {
+      setEventsError(e instanceof Error ? e.message : "活动列表加载失败");
+    } finally {
+      setLoadingEvents(false);
+    }
+  }, []);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -72,6 +114,21 @@ export default function HomeScreen() {
     };
   }, []);
 
+  useEffect(() => {
+    void loadEvents();
+  }, [loadEvents]);
+
+  const listItems = useMemo(() => {
+    if (!events.length) {
+      return FALLBACK_ITEMS;
+    }
+    return events.map((event) => ({
+      id: event.event_id,
+      title: event.title,
+      description: formatEventDescription(event),
+    }));
+  }, [events]);
+
   const handleCarouselScrollEnd = (
     event: NativeSyntheticEvent<NativeScrollEvent>,
   ) => {
@@ -84,7 +141,7 @@ export default function HomeScreen() {
     <SafeAreaView style={styles.safeArea} edges={["top", "left", "right"]}>
       <ThemedView style={styles.container}>
         <ThemedView style={styles.topSection}>
-          <ThemedText type="subtitle">轮播图</ThemedText>
+          <ThemedText type="subtitle">活动推荐</ThemedText>
           <FlatList
             ref={carouselRef}
             data={CAROUSEL_ITEMS}
@@ -118,13 +175,28 @@ export default function HomeScreen() {
         </ThemedView>
 
         <ThemedView style={styles.bottomSection}>
-          <ThemedText type="subtitle">滚动列表</ThemedText>
+          <View style={styles.sectionHeader}>
+            <ThemedView style={styles.sectionTitleWrap}>
+              <ThemedText type="subtitle">近期活动</ThemedText>
+              {eventsError ? (
+                <ThemedText style={styles.errorText}>{eventsError}</ThemedText>
+              ) : null}
+            </ThemedView>
+            <Pressable
+              style={styles.publishButton}
+              onPress={() => router.push("/event/create")}
+            >
+              <ThemedText style={styles.publishButtonText}>发布</ThemedText>
+            </Pressable>
+          </View>
           <FlatList
-            data={LIST_ITEMS}
+            data={listItems}
             keyExtractor={(item) => item.id}
             style={styles.list}
             showsVerticalScrollIndicator={false}
             contentContainerStyle={styles.listContent}
+            refreshing={loadingEvents}
+            onRefresh={loadEvents}
             renderItem={({ item }) => (
               <ThemedView
                 style={styles.listCard}
@@ -140,6 +212,28 @@ export default function HomeScreen() {
       </ThemedView>
     </SafeAreaView>
   );
+}
+
+function formatEventDescription(event: EventResp): string {
+  const parts = [
+    event.start_at ? formatDateTime(event.start_at) : undefined,
+    event.location_name,
+    event.summary,
+  ].filter(Boolean);
+  return parts.join(" · ") || "暂无活动简介";
+}
+
+function formatDateTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return date.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 const styles = StyleSheet.create({
@@ -199,6 +293,33 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingHorizontal: 16,
     paddingTop: 10,
+  },
+  sectionHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  sectionTitleWrap: {
+    flex: 1,
+  },
+  publishButton: {
+    minWidth: 64,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: "#0A7EA4",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 14,
+  },
+  publishButtonText: {
+    color: "#FFFFFF",
+    fontWeight: "700",
+  },
+  errorText: {
+    color: "#D64545",
+    fontSize: 12,
+    lineHeight: 16,
+    marginTop: 2,
   },
   list: {
     marginTop: 10,

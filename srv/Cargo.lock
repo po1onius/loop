@@ -564,6 +564,7 @@ dependencies = [
  "ipnet",
  "itoa",
  "libc",
+ "serde_json",
  "uuid",
 ]
 

@@ -66,6 +66,7 @@ perm_ver = 1
 user = [
   "event.read",
   "event.join",
+  "event.create",
   "community.post.create",
 ]
 
@@ -147,6 +148,7 @@ perm_ver = 1
 user = [
   "event.read",
   "event.join",
+  "event.create",
   "community.post.create",
 ]
 
