@@ -9,7 +9,6 @@ services:
       POSTGRES_USER: srus
     volumes:
       - loop-pgdata:/var/lib/postgresql
-      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
     ports:
       - "5132:5432"
 
@@ -35,7 +34,7 @@ services:
       - tempo
 
   tempo:
-    # Do not use grafana/tempo:latest here: Docker Hub's latest tag can track
+    # Pin Tempo instead of using latest: the registry's latest tag can track
     # main branch builds and may reject the stable 2.x config schema below.
     image: docker.io/grafana/tempo:2.10.5
     container_name: loop-tempo
@@ -85,8 +84,6 @@ services:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
     ports:
       - "9090:9090"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
 
   grafana:
     image: docker.io/grafana/grafana-oss:latest

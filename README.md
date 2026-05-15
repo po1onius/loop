@@ -100,6 +100,7 @@ JWT 私钥、公钥、数据库密码、SMTP token 等敏感信息不要写入 C
 make local-init
 cp deploy/local/.env.example deploy/local/.env
 make deps-up
+make db-migrate
 make dev-event
 ```
 
@@ -110,11 +111,21 @@ make dev-event
 常用命令：
 
 ```bash
+make db-status
+make db-migrate
 make fmt-check
 make check
 make clippy
 make test-event
 ```
+
+数据库 schema 使用 Diesel migrations 管理，迁移文件位于 `srv/migrations/`。本地执行迁移前需要安装 Diesel CLI：
+
+```bash
+cargo install diesel_cli --no-default-features --features postgres
+```
+
+`make db-migrate` 会读取 `deploy/local/.env` 中的 `DATABASE_URL`，未设置时使用 `LOOP_PG_CONN` 并导出为 Diesel CLI 使用的 `DATABASE_URL`。数据库表结构、索引和约束只通过 migrations 管理；后续 schema 变更请新增 migration，不要直接改历史 migration。
 
 ## 后端权限模型
 

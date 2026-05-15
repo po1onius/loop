@@ -80,7 +80,6 @@ pub struct NewRefreshTokens<'a> {
     pub user_agent: Option<&'a str>,
 }
 
-joinable!(refresh_tokens -> users (user_id));
 allow_tables_to_appear_in_same_query!(users, refresh_tokens);
 
 impl User {

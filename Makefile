@@ -17,6 +17,10 @@ help:
 		'  make dev-event      Run loop-event-svc with deploy/local/.env loaded' \
 		'  make deps-up        Start local Postgres and Redis from deploy/compose.yaml' \
 		'  make deps-down      Stop local compose dependencies' \
+		'  make db-migrate     Run Diesel migrations against local Postgres' \
+		'  make db-revert      Revert the latest Diesel migration' \
+		'  make db-redo        Revert and rerun the latest Diesel migration' \
+		'  make db-status      Show Diesel migration status' \
 		'  make fmt            Format Rust workspace' \
 		'  make fmt-check      Check Rust formatting' \
 		'  make check          cargo check for srv workspace' \
@@ -46,6 +50,30 @@ deps-up:
 .PHONY: deps-down
 deps-down:
 	@$(COMPOSE) -f "$(COMPOSE_FILE)" down
+
+.PHONY: db-migrate db-revert db-redo db-status
+db-migrate: DIESEL_MIGRATION_CMD := run
+db-revert: DIESEL_MIGRATION_CMD := revert
+db-redo: DIESEL_MIGRATION_CMD := redo
+db-status: DIESEL_MIGRATION_CMD := list
+db-migrate db-revert db-redo db-status:
+	@if [[ ! -f "$(LOCAL_ENV)" ]]; then \
+		echo "missing $(LOCAL_ENV)"; \
+		echo "run: make local-init"; \
+		echo "then copy deploy/local/.env.example to $(LOCAL_ENV) and adjust values"; \
+		exit 1; \
+	fi
+	@if ! command -v diesel >/dev/null 2>&1; then \
+		echo "missing diesel CLI"; \
+		echo "install: cargo install diesel_cli --no-default-features --features postgres"; \
+		exit 1; \
+	fi
+	@set -a; source "$(LOCAL_ENV)"; set +a; \
+	if [[ -z "$${DATABASE_URL:-}" ]]; then \
+		: "$${LOOP_PG_CONN:?missing LOOP_PG_CONN or DATABASE_URL in $(LOCAL_ENV); quote URLs that contain &}"; \
+		export DATABASE_URL="$${LOOP_PG_CONN}"; \
+	fi; \
+	cd "$(SRV_DIR)" && diesel migration $(DIESEL_MIGRATION_CMD)
 
 .PHONY: fmt
 fmt:
