@@ -8,3 +8,11 @@ perm_ver = 1
 user = ["event.read", "event.join", "community.post.create"]
 organizer = ["event.read", "event.join", "event.create", "event.update_own"]
 admin = ["*"]
+
+[email]
+from = "verify.kit.xin@qq.com"
+
+[email.smtp]
+sender = "verify.kit.xin@qq.com"
+token = "REDACTED_SMTP_TOKEN"
+domain = "smtp.qq.com"

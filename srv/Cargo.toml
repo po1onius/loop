@@ -15,7 +15,7 @@ edition = "2024"
 
 [workspace.dependencies]
 tokio = { version = "*", features = ["full"] }
-jsonwebtoken = "*"
+jsonwebtoken = { version = "*", features = ["aws_lc_rs"] }
 diesel = { version = "*", features = ["uuid", "chrono", "ipnet-address"] }
 diesel-async = { version = "*", features = ["postgres", "deadpool"] }
 anyhow = { version = "*" }
