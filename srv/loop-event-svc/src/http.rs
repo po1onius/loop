@@ -2,8 +2,12 @@ pub mod api;
 pub mod middleware;
 mod util;
 
-use crate::http::api::user;
-use axum::Router;
+use crate::http::{
+    api::user,
+    middleware::{ApiRule, RouteAccess},
+};
+use axum::{Router, routing::MethodRouter};
+use http::Method;
 use jsonwebtoken::DecodingKey;
 use jsonwebtoken::EncodingKey;
 use loop_infra::http_error::ApiErrorCode;
@@ -31,6 +35,97 @@ pub struct AppState {
 pub struct AuthInfo {
     pub user_id: i64,
     pub role: String,
+}
+
+// Keeps Axum route registration and auth policy registration on the same path.
+// Each API module returns this wrapper instead of a bare Router.
+pub struct AppRoutes<S = ()> {
+    router: Router<S>,
+    rules: Vec<ApiRule>,
+}
+
+impl AppRoutes {
+    pub fn empty() -> Self {
+        Self {
+            router: Router::new(),
+            rules: Vec::new(),
+        }
+    }
+
+    pub fn nest(mut self, path: &'static str, routes: AppRoutes) -> Self {
+        self.router = self.router.nest(path, routes.router);
+        self.rules
+            .extend(routes.rules.into_iter().map(|rule| rule.with_prefix(path)));
+        self
+    }
+
+    pub fn into_parts(self) -> (Router, Vec<ApiRule>) {
+        (self.router, self.rules)
+    }
+}
+
+impl<S> AppRoutes<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    pub fn new() -> Self {
+        Self {
+            router: Router::new(),
+            rules: Vec::new(),
+        }
+    }
+
+    pub fn public(
+        self,
+        method: Method,
+        path: &'static str,
+        method_router: MethodRouter<S>,
+    ) -> Self {
+        self.route(method, path, RouteAccess::Public, method_router)
+    }
+
+    pub fn protected(
+        self,
+        method: Method,
+        path: &'static str,
+        permission: &'static str,
+        method_router: MethodRouter<S>,
+    ) -> Self {
+        self.route(
+            method,
+            path,
+            RouteAccess::Protected(permission),
+            method_router,
+        )
+    }
+
+    fn route(
+        mut self,
+        method: Method,
+        path: &'static str,
+        access: RouteAccess,
+        method_router: MethodRouter<S>,
+    ) -> Self {
+        self.router = self.router.route(path, method_router);
+        self.rules.push(ApiRule::new(method, path, access));
+        self
+    }
+
+    pub fn with_state(self, state: S) -> AppRoutes {
+        AppRoutes {
+            router: self.router.with_state(state),
+            rules: self.rules,
+        }
+    }
+}
+
+impl<S> Default for AppRoutes<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[macro_export]
@@ -61,8 +156,8 @@ macro_rules! db_conn {
     }};
 }
 
-pub fn route(state: AppState) -> Router {
-    Router::new().merge(user::route(state))
+pub fn route(state: AppState) -> AppRoutes {
+    AppRoutes::empty().nest("/loop", user::route(state))
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]

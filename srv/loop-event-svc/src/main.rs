@@ -21,7 +21,11 @@ use tracing::Level;
 
 use crate::{
     config::{CONFIG, Config, InfraConfig},
-    http::{AppState, middleware::auth, route},
+    http::{
+        AppState,
+        middleware::{AuthMiddlewareState, AuthPolicy, auth},
+        route,
+    },
 };
 
 pub const SERVICE_NAME: &str = "loop-event-svc";
@@ -56,14 +60,15 @@ async fn main() -> ExitCode {
 }
 
 pub fn build_app(state: AppState) -> Router {
-    let protected_app = Router::new()
-        .nest("/loop", route(state.clone()))
-        .layer(middleware::from_fn_with_state(state, auth));
+    let routes = route(state.clone());
+    let (api_router, rules) = routes.into_parts();
+    let auth_state = AuthMiddlewareState::new(state, AuthPolicy::new(rules));
+    let api_app = api_router.layer(middleware::from_fn_with_state(auth_state, auth));
 
     let request_id_header = HeaderName::from_static("x-request-id");
     Router::new()
         .route("/metrics", get(metrics_handler))
-        .merge(protected_app)
+        .merge(api_app)
         .layer(middleware::from_fn(record_http_metrics))
         .layer(PropagateRequestIdLayer::new(request_id_header.clone()))
         .layer(SetRequestIdLayer::new(request_id_header, MakeRequestUuid))

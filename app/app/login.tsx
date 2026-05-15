@@ -84,7 +84,10 @@ export default function LoginScreen() {
                 {submitting ? "登录中..." : "登录"}
               </ThemedText>
             </Pressable>
-            <Pressable onPress={() => router.push("./register")} style={styles.linkWrap}>
+            <Pressable
+              onPress={() => router.push("/register")}
+              style={styles.linkWrap}
+            >
               <ThemedText style={styles.linkText}>还没有账号？去注册</ThemedText>
             </Pressable>
           </ThemedView>

@@ -12,4 +12,4 @@ export type SetTokenRequest = { user_id: string, num: bigint, };
 
 export type VerifyCodeRequest = { account: string, };
 
-export type VerifyCodeResp = {};
+export type VerifyCodeResp = Record<symbol, never>;

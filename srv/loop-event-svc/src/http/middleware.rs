@@ -10,51 +10,79 @@ use axum::{
 };
 use http::{Method, StatusCode, header::AUTHORIZATION};
 use jsonwebtoken::{Algorithm, Validation, decode};
+use std::sync::Arc;
 
 use axum::{extract::FromRequestParts, http::request::Parts};
 
-const PUBLIC_API_RULES: &[ApiRule] = &[
-    ApiRule::new("POST", "/loop/user/login"),
-    ApiRule::new("POST", "/loop/user/refresh_token"),
-    ApiRule::new("POST", "/loop/user/register"),
-    ApiRule::new("POST", "/loop/user/verify_code"),
-];
+#[derive(Clone)]
+pub struct AuthMiddlewareState {
+    app: AppState,
+    policy: AuthPolicy,
+}
 
-const PROTECTED_API_RULES: &[ApiPermissionRule] = &[
-    // ApiPermissionRule {
-    //     rule: ApiRule::new("POST", "/loop/event"),
-    //     permission: "event.create",
-    // },
-];
+impl AuthMiddlewareState {
+    pub fn new(app: AppState, policy: AuthPolicy) -> Self {
+        Self { app, policy }
+    }
+}
 
-#[derive(Clone, Copy)]
-struct ApiRule {
-    method: &'static str,
-    path: &'static str,
+#[derive(Clone, Debug)]
+pub struct AuthPolicy {
+    rules: Arc<[ApiRule]>,
+}
+
+impl AuthPolicy {
+    pub fn new(rules: Vec<ApiRule>) -> Self {
+        Self {
+            rules: Arc::from(rules),
+        }
+    }
+
+    fn requirement(&self, method: &Method, path: &str) -> PermissionRequirement {
+        self.rules
+            .iter()
+            .find(|rule| rule.matches(method, path))
+            .map(|rule| match rule.access {
+                RouteAccess::Public => PermissionRequirement::Public,
+                RouteAccess::Protected(permission) => PermissionRequirement::Protected(permission),
+            })
+            .unwrap_or(PermissionRequirement::Unconfigured)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ApiRule {
+    method: Method,
+    path: String,
+    access: RouteAccess,
 }
 
 impl ApiRule {
-    const fn new(method: &'static str, path: &'static str) -> Self {
-        Self { method, path }
+    pub fn new(method: Method, path: impl Into<String>, access: RouteAccess) -> Self {
+        Self {
+            method,
+            path: normalize_route_path(path.into()),
+            access,
+        }
     }
 
-    fn matches(self, method: &Method, path: &str) -> bool {
-        self.method == method.as_str() && self.path == path
+    pub fn with_prefix(mut self, prefix: &str) -> Self {
+        self.path = join_route_path(prefix, &self.path);
+        self
     }
-}
 
-#[derive(Clone, Copy)]
-struct ApiPermissionRule {
-    rule: ApiRule,
-    permission: &'static str,
-}
-
-impl ApiPermissionRule {
-    fn matches(self, method: &Method, path: &str) -> bool {
-        self.rule.matches(method, path)
+    fn matches(&self, method: &Method, path: &str) -> bool {
+        self.method.as_str() == method.as_str() && self.path == path
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RouteAccess {
+    Public,
+    Protected(&'static str),
+}
+
+#[derive(Debug, Eq, PartialEq)]
 enum PermissionRequirement {
     Public,
     Protected(&'static str),
@@ -87,7 +115,7 @@ where
     )
 )]
 pub async fn auth(
-    State(state): State<AppState>,
+    State(state): State<AuthMiddlewareState>,
     mut req: Request,
     next: Next,
 ) -> Result<Response<Body>, HttpErr> {
@@ -96,7 +124,7 @@ pub async fn auth(
     span.record("http.method", tracing::field::display(req.method()));
     span.record("http.route", tracing::field::display(&route));
 
-    let requirement = permission_requirement(&req);
+    let requirement = state.policy.requirement(req.method(), &route);
     let claims = req
         .headers()
         .get(AUTHORIZATION)
@@ -106,7 +134,7 @@ pub async fn auth(
             let mut validation = Validation::new(Algorithm::RS256);
             validation.validate_aud = false;
             validation.leeway = 0;
-            decode::<Claims>(t, &state.jwt_dec, &validation).ok()
+            decode::<Claims>(t, &state.app.jwt_dec, &validation).ok()
         })
         .map(|c| c.claims)
         .map(|claims| {
@@ -169,24 +197,6 @@ pub async fn auth(
     Ok(res)
 }
 
-fn permission_requirement(req: &Request) -> PermissionRequirement {
-    let method = req.method();
-    let path = request_path(req);
-
-    if PUBLIC_API_RULES
-        .iter()
-        .any(|rule| rule.matches(method, path.as_ref()))
-    {
-        return PermissionRequirement::Public;
-    }
-
-    PROTECTED_API_RULES
-        .iter()
-        .find(|rule| rule.matches(method, path.as_ref()))
-        .map(|rule| PermissionRequirement::Protected(rule.permission))
-        .unwrap_or(PermissionRequirement::Unconfigured)
-}
-
 fn request_path(req: &Request) -> std::borrow::Cow<'_, str> {
     req.extensions()
         .get::<MatchedPath>()
@@ -246,6 +256,26 @@ fn has_permission(permissions: &[String], required: &str) -> bool {
         .any(|permission| permission_matches(permission, required))
 }
 
+fn normalize_route_path(path: String) -> String {
+    if path.starts_with('/') {
+        path
+    } else {
+        format!("/{path}")
+    }
+}
+
+fn join_route_path(prefix: &str, path: &str) -> String {
+    let prefix = prefix.trim_end_matches('/');
+    let path = path.trim_start_matches('/');
+    if prefix.is_empty() {
+        normalize_route_path(path.to_string())
+    } else if path.is_empty() {
+        normalize_route_path(prefix.to_string())
+    } else {
+        format!("{prefix}/{path}")
+    }
+}
+
 fn permission_matches(permission: &str, required: &str) -> bool {
     permission == "*"
         || permission == required
@@ -278,6 +308,35 @@ mod tests {
     #[test]
     fn global_wildcard_matches_everything() {
         assert!(permission_matches("*", "community.post.audit"));
+    }
+
+    #[test]
+    fn auth_policy_resolves_route_requirements() {
+        let policy = AuthPolicy::new(vec![
+            ApiRule::new(Method::POST, "/loop/user/login", RouteAccess::Public),
+            ApiRule::new(
+                Method::POST,
+                "/loop/event",
+                RouteAccess::Protected("event.create"),
+            ),
+        ]);
+
+        assert_eq!(
+            policy.requirement(&Method::POST, "/loop/user/login"),
+            PermissionRequirement::Public
+        );
+        assert_eq!(
+            policy.requirement(&Method::POST, "/loop/event"),
+            PermissionRequirement::Protected("event.create")
+        );
+        assert_eq!(
+            policy.requirement(&Method::GET, "/loop/user/login"),
+            PermissionRequirement::Unconfigured
+        );
+        assert_eq!(
+            policy.requirement(&Method::POST, "/loop/unregistered"),
+            PermissionRequirement::Unconfigured
+        );
     }
 
     #[test]

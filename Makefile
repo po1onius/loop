@@ -21,6 +21,7 @@ help:
 		'  make db-revert      Revert the latest Diesel migration' \
 		'  make db-redo        Revert and rerun the latest Diesel migration' \
 		'  make db-status      Show Diesel migration status' \
+		'  make dto-gen        Generate TypeScript DTO bindings for app/lib/dto.ts' \
 		'  make fmt            Format Rust workspace' \
 		'  make fmt-check      Check Rust formatting' \
 		'  make check          cargo check for srv workspace' \
@@ -74,6 +75,10 @@ db-migrate db-revert db-redo db-status:
 		export DATABASE_URL="$${LOOP_PG_CONN}"; \
 	fi; \
 	cd "$(SRV_DIR)" && diesel migration $(DIESEL_MIGRATION_CMD)
+
+.PHONY: dto-gen
+dto-gen:
+	@cd loop-dto && $(CARGO) run --quiet --bin export_dto
 
 .PHONY: fmt
 fmt:

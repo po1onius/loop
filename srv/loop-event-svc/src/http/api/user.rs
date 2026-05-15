@@ -2,20 +2,20 @@ use crate::{
     config::CONFIG,
     db_conn,
     http::{
-        AppState, Claims, HttpErr, OptionExt, ResultExt,
+        AppRoutes, AppState, Claims, HttpErr, OptionExt, ResultExt,
         err_key::*,
         util::{ckb_vc, generate_code, hex_encode},
     },
     redis_conn,
     service::notify::email_code,
 };
-use axum::{Json, Router, extract::State, routing::post};
+use axum::{Json, extract::State, routing::post};
 use base64::Engine;
 use bcrypt::{DEFAULT_COST, hash, verify};
 use chrono::{Duration, Utc};
 use diesel::result::{DatabaseErrorKind, Error as DieselError};
 use diesel_async::AsyncConnection;
-use http::StatusCode;
+use http::{Method, StatusCode};
 use jsonwebtoken::{Algorithm, Header, encode};
 use loop_dto::{
     LoginRequest, LoginResp, RefreshTokenRequest, RegisterRequest, VerifyCodeRequest,
@@ -299,15 +299,11 @@ fn map_user_insert_error(err: DieselError) -> HttpErr {
     }
 }
 
-pub fn route(state: AppState) -> Router {
-    Router::new()
-        .nest(
-            "/user",
-            Router::new()
-                .route("/login", post(login))
-                .route("/refresh_token", post(refresh))
-                .route("/register", post(register))
-                .route("/verify_code", post(verify_code)),
-        )
+pub fn route(state: AppState) -> AppRoutes {
+    AppRoutes::<AppState>::new()
+        .public(Method::POST, "/user/login", post(login))
+        .public(Method::POST, "/user/refresh_token", post(refresh))
+        .public(Method::POST, "/user/register", post(register))
+        .public(Method::POST, "/user/verify_code", post(verify_code))
         .with_state(state)
 }

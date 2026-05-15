@@ -76,7 +76,6 @@ export default function RegisterScreen() {
         pwd: password,
         verify_code: verifyCodeText.trim(),
       });
-      setInfo("注册成功，请返回登录");
       router.replace("/login");
     } catch (e) {
       setError(e instanceof Error ? e.message : "注册失败");

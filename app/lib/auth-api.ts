@@ -14,36 +14,55 @@ const API_BASE_URL =
     ? "http://10.0.2.2:3000/loop"
     : "http://127.0.0.1:3000/loop");
 
-async function readError(resp: Response): Promise<string> {
+async function readResponseText(resp: Response): Promise<string> {
   try {
-    const data = await resp.json();
-    if (typeof data === "string" && data.trim()) {
-      return data.trim();
-    }
-    if (data && typeof data === "object") {
-      const candidate = data as Record<string, unknown>;
-      const msgKeys = ["message", "msg", "error", "reason"];
-      for (const key of msgKeys) {
-        const value = candidate[key];
-        if (typeof value === "string" && value.trim()) {
-          return value.trim();
+    return await resp.text();
+  } catch {
+    return "";
+  }
+}
+
+async function readError(resp: Response): Promise<string> {
+  const text = await readResponseText(resp);
+  if (!text.trim()) {
+    return `请求失败 (${resp.status})`;
+  }
+
+  const contentType = resp.headers.get("content-type") ?? "";
+  if (contentType.includes("application/json")) {
+    try {
+      const data = JSON.parse(text) as unknown;
+      if (typeof data === "string" && data.trim()) {
+        return data.trim();
+      }
+      if (data && typeof data === "object") {
+        const candidate = data as Record<string, unknown>;
+        const msgKeys = ["message", "msg", "error", "reason"];
+        for (const key of msgKeys) {
+          const value = candidate[key];
+          if (typeof value === "string" && value.trim()) {
+            return value.trim();
+          }
         }
       }
+    } catch {
+      // Fall through to the raw response text below.
     }
-  } catch {
-    // ignore
+  }
+
+  return text.trim();
+}
+
+function parseJsonResponse<TResp>(text: string): TResp {
+  if (!text.trim()) {
+    return undefined as TResp;
   }
 
   try {
-    const text = await resp.text();
-    if (text.trim()) {
-      return text.trim();
-    }
+    return JSON.parse(text) as TResp;
   } catch {
-    // ignore
+    throw new Error("响应内容不是有效 JSON");
   }
-
-  return `请求失败 (${resp.status})`;
 }
 
 async function postJson<TReq, TResp>(path: string, body: TReq): Promise<TResp> {
@@ -61,11 +80,12 @@ async function postJson<TReq, TResp>(path: string, body: TReq): Promise<TResp> {
     throw new Error(await readError(resp));
   }
 
-  if (resp.status === 204) {
+  if (resp.status === 204 || resp.status === 205) {
     return undefined as TResp;
   }
 
-  return (await resp.json()) as TResp;
+  const text = await readResponseText(resp);
+  return parseJsonResponse<TResp>(text);
 }
 
 function toBigInt(value: number | string | bigint, field: string): bigint {
