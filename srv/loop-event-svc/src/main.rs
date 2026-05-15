@@ -5,7 +5,12 @@ pub mod service;
 use std::{process::ExitCode, sync::Arc};
 
 use anyhow::Context;
-use axum::{Router, http::HeaderName, middleware, routing::get};
+use axum::{
+    Router,
+    http::{HeaderName, Method, header},
+    middleware,
+    routing::get,
+};
 use jsonwebtoken::{DecodingKey, EncodingKey};
 use loop_infra::observability::{extract_trace_context, metrics_handler, record_http_metrics};
 use loop_infra::{
@@ -14,6 +19,7 @@ use loop_infra::{
     redis::init_redis_pool,
 };
 use tower_http::{
+    cors::{Any, CorsLayer},
     request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer},
     trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer},
 };
@@ -64,6 +70,11 @@ pub fn build_app(state: AppState) -> Router {
     let (api_router, rules) = routes.into_parts();
     let auth_state = AuthMiddlewareState::new(state, AuthPolicy::new(rules));
     let api_app = api_router.layer(middleware::from_fn_with_state(auth_state, auth));
+    let api_app = if should_enable_cors() {
+        api_app.layer(cors_layer())
+    } else {
+        api_app
+    };
 
     let request_id_header = HeaderName::from_static("x-request-id");
     Router::new()
@@ -82,6 +93,18 @@ pub fn build_app(state: AppState) -> Router {
                 )
                 .on_response(DefaultOnResponse::new().level(Level::DEBUG)),
         )
+}
+
+fn cors_layer() -> CorsLayer {
+    CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
+}
+
+fn should_enable_cors() -> bool {
+    cfg!(debug_assertions)
+        || std::env::var("LOOP_ENV").is_ok_and(|env| env.eq_ignore_ascii_case("local"))
 }
 
 async fn run() -> anyhow::Result<()> {
