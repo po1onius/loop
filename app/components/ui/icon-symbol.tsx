@@ -18,10 +18,12 @@ type IconSymbolName = keyof typeof MAPPING;
  */
 const MAPPING = {
   calendar: "event",
+  "chevron.left": "chevron-left",
   "house.fill": "home",
   "message.fill": "chat",
   "paperplane.fill": "send",
   "person.3.fill": "groups",
+  "square.and.pencil": "edit",
   "chevron.left.forwardslash.chevron.right": "code",
   "chevron.right": "chevron-right",
 } as IconMapping;

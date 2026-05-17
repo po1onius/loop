@@ -1,6 +1,9 @@
+import { useFocusEffect } from "@react-navigation/native";
+import { router } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FlatList,
+  Pressable,
   StyleSheet,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
@@ -11,6 +14,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { ThemedText } from "@/components/themed-text";
 import { ThemedView } from "@/components/themed-view";
+import { IconSymbol } from "@/components/ui/icon-symbol";
 import type { EventResp } from "@/lib/dto";
 import { listEvents } from "@/lib/event-api";
 
@@ -98,6 +102,12 @@ export default function HomeScreen() {
     }
   }, []);
 
+  useFocusEffect(
+    useCallback(() => {
+      void loadEvents();
+    }, [loadEvents]),
+  );
+
   useEffect(() => {
     const timer = setInterval(() => {
       setActiveIndex((prevIndex) => {
@@ -111,10 +121,6 @@ export default function HomeScreen() {
       clearInterval(timer);
     };
   }, []);
-
-  useEffect(() => {
-    void loadEvents();
-  }, [loadEvents]);
 
   const listItems = useMemo(() => {
     if (!events.length) {
@@ -180,6 +186,14 @@ export default function HomeScreen() {
                 <ThemedText style={styles.errorText}>{eventsError}</ThemedText>
               ) : null}
             </ThemedView>
+            <Pressable
+              accessibilityRole="button"
+              style={styles.createButton}
+              onPress={() => router.push("/create-event" as never)}
+            >
+              <IconSymbol size={18} name="square.and.pencil" color="#FFFFFF" />
+              <ThemedText style={styles.createButtonText}>发布</ThemedText>
+            </Pressable>
           </View>
           <FlatList
             data={listItems}
@@ -293,6 +307,22 @@ const styles = StyleSheet.create({
   },
   sectionTitleWrap: {
     flex: 1,
+  },
+  createButton: {
+    height: 38,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    backgroundColor: "#0A7EA4",
+  },
+  createButtonText: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    lineHeight: 18,
+    fontWeight: "700",
   },
   errorText: {
     color: "#D64545",

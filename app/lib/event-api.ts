@@ -1,4 +1,4 @@
-import type { EventResp, ListEventsResp } from "@/lib/dto";
+import type { CreateEventRequest, EventResp, ListEventsResp } from "@/lib/dto";
 import { requestJson } from "@/lib/api-client";
 
 export function listEvents(limit = 20, offset = 0): Promise<ListEventsResp> {
@@ -9,4 +9,17 @@ export function listEvents(limit = 20, offset = 0): Promise<ListEventsResp> {
   return requestJson<undefined, ListEventsResp>(`/event?${params.toString()}`);
 }
 
-export type { EventResp, ListEventsResp };
+export function createEvent(params: CreateEventRequest): Promise<EventResp> {
+  console.info("[event-api] creating event", {
+    titleLength: params.title.trim().length,
+    blockCount: params.content.blocks.length,
+    tagCount: params.tags.length,
+  });
+  return requestJson<CreateEventRequest, EventResp>("/event", {
+    method: "POST",
+    auth: true,
+    body: params,
+  });
+}
+
+export type { CreateEventRequest, EventResp, ListEventsResp };
