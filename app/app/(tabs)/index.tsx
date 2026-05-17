@@ -1,8 +1,6 @@
-import { router } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FlatList,
-  Pressable,
   StyleSheet,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
@@ -182,12 +180,6 @@ export default function HomeScreen() {
                 <ThemedText style={styles.errorText}>{eventsError}</ThemedText>
               ) : null}
             </ThemedView>
-            <Pressable
-              style={styles.publishButton}
-              onPress={() => router.push("/event/create")}
-            >
-              <ThemedText style={styles.publishButtonText}>发布</ThemedText>
-            </Pressable>
           </View>
           <FlatList
             data={listItems}
@@ -301,19 +293,6 @@ const styles = StyleSheet.create({
   },
   sectionTitleWrap: {
     flex: 1,
-  },
-  publishButton: {
-    minWidth: 64,
-    height: 36,
-    borderRadius: 10,
-    backgroundColor: "#0A7EA4",
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 14,
-  },
-  publishButtonText: {
-    color: "#FFFFFF",
-    fontWeight: "700",
   },
   errorText: {
     color: "#D64545",
