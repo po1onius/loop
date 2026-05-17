@@ -183,6 +183,7 @@ impl StdError for ApiError {
     }
 }
 
+#[cfg(feature = "db")]
 impl From<diesel::result::Error> for ApiError {
     #[track_caller]
     fn from(err: diesel::result::Error) -> Self {

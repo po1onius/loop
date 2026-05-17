@@ -168,6 +168,63 @@ pub struct ListEventsResp {
 
 #[derive(Debug, Serialize, Deserialize, TS)]
 #[ts(export_to = "dto.ts")]
+pub struct CreateMediaUploadRequest {
+    pub mime_type: String,
+    pub byte_size: i32,
+    pub width: Option<i32>,
+    pub height: Option<i32>,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export_to = "dto.ts")]
+pub struct PresignedHeader {
+    pub name: String,
+    pub value: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export_to = "dto.ts")]
+pub struct CreateMediaUploadResp {
+    pub asset_id: String,
+    pub storage_key: String,
+    pub upload_method: String,
+    pub upload_url: String,
+    pub upload_headers: Vec<PresignedHeader>,
+    pub expires_in: i32,
+    pub public_url: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export_to = "dto.ts")]
+pub struct MediaAssetResp {
+    pub asset_id: String,
+    pub mime_type: String,
+    pub byte_size: i64,
+    pub width: Option<i32>,
+    pub height: Option<i32>,
+    pub status: String,
+    pub public_url: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export_to = "dto.ts")]
+pub struct CompleteMediaUploadResp {
+    pub asset: MediaAssetResp,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export_to = "dto.ts")]
+pub struct MediaDownloadUrlResp {
+    pub asset_id: String,
+    pub download_method: String,
+    pub download_url: String,
+    pub download_headers: Vec<PresignedHeader>,
+    pub expires_in: i32,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export_to = "dto.ts")]
 pub struct LoginRequest {
     pub account: String,
     pub password: String,

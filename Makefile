@@ -15,7 +15,7 @@ help:
 	@printf '%s\n' \
 		'Targets:' \
 		'  make dev-event      Run loop-event-svc with deploy/local/.env loaded' \
-		'  make deps-up        Start local Postgres and Redis from deploy/compose.yaml' \
+		'  make deps-up        Start local Postgres, Redis and MinIO from deploy/compose.yaml' \
 		'  make deps-down      Stop local compose dependencies' \
 		'  make db-migrate     Run Diesel migrations against local Postgres' \
 		'  make db-revert      Revert the latest Diesel migration' \
@@ -46,7 +46,7 @@ dev-event:
 
 .PHONY: deps-up
 deps-up:
-	@$(COMPOSE) -f "$(COMPOSE_FILE)" up -d db cache
+	@$(COMPOSE) -f "$(COMPOSE_FILE)" up -d db cache minio minio-init
 
 .PHONY: deps-down
 deps-down:
@@ -115,6 +115,9 @@ local-init:
 			"LOOP_REDIS_CONN='redis://localhost:6319'" \
 			"LOOP_JWT_RSA_PRI_KEY_FILE='../deploy/local/secrets/jwt_private.pem'" \
 			"LOOP_JWT_RSA_PUB_KEY_FILE='../deploy/local/secrets/jwt_public.pem'" \
+			"LOOP_SMTP_TOKEN='local-smtp-token'" \
+			"LOOP_S3_ACCESS_KEY_ID='loopadmin'" \
+			"LOOP_S3_SECRET_ACCESS_KEY='loopadmin123'" \
 			> deploy/local/.env.example; \
 	fi
 	@if [[ ! -f deploy/local/loop-event-svc.example.toml ]]; then \
@@ -126,11 +129,29 @@ local-init:
 			'perm_ver = 1' \
 			'' \
 			'[perm.role_perm]' \
-			'user = ["event.read", "event.join", "event.create", "community.post.create"]' \
-			'organizer = ["event.read", "event.join", "event.create", "event.update_own"]' \
+			'user = ["event.read", "event.join", "event.create", "media.upload", "community.post.create"]' \
+			'organizer = ["event.read", "event.join", "event.create", "event.update_own", "media.upload"]' \
 			'admin = ["*"]' \
+			'' \
+			'[email]' \
+			'from = "Loop <no-reply@example.com>"' \
+			'' \
+			'[email.smtp]' \
+			'sender = "smtp-user"' \
+			'domain = "smtp.example.com"' \
+			'' \
+			'[storage]' \
+			'bucket = "loop-local"' \
+			'region = "us-east-1"' \
+			'endpoint_url = "http://127.0.0.1:9000"' \
+			'public_base_url = "http://127.0.0.1:9000/loop-local"' \
+			'key_prefix = "media"' \
+			'force_path_style = true' \
+			'presign_expires_secs = 900' \
+			'max_upload_bytes = 10485760' \
+			'allowed_mime_types = ["image/jpeg", "image/png", "image/webp", "image/gif"]' \
 			> deploy/local/loop-event-svc.example.toml; \
 	fi
 	@printf '%s\n' \
 		'created local examples under deploy/local/' \
-		'copy deploy/local/.env.example to deploy/local/.env and add secret files before make dev-event'
+		'copy deploy/local/.env.example to deploy/local/.env and add JWT key files before make dev-event'

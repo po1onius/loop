@@ -12,12 +12,9 @@ use axum::{
     routing::get,
 };
 use jsonwebtoken::{DecodingKey, EncodingKey};
+use loop_infra::config::InfraConfig;
+use loop_infra::observability::{ObservabilityConfig, init as init_observability};
 use loop_infra::observability::{extract_trace_context, metrics_handler, record_http_metrics};
-use loop_infra::{
-    db::init_pg_pool,
-    observability::{ObservabilityConfig, init as init_observability},
-    redis::init_redis_pool,
-};
 use tower_http::{
     cors::{Any, CorsLayer},
     request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer},
@@ -26,7 +23,7 @@ use tower_http::{
 use tracing::Level;
 
 use crate::{
-    config::{Config, InfraConfig, config, init_config},
+    config::{Config, config, init_config},
     http::{
         AppState,
         middleware::{AuthMiddlewareState, AuthPolicy, auth},
@@ -109,9 +106,8 @@ fn should_enable_cors() -> bool {
 
 async fn run() -> anyhow::Result<()> {
     let infra_config = InfraConfig::from_env()?;
+    infra_config.init()?;
     init_config(Config::from_env()?)?;
-    init_pg_pool(&infra_config.pg_conn)?;
-    init_redis_pool(&infra_config.redis_conn)?;
 
     let cfg = config();
 

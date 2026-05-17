@@ -2,6 +2,12 @@
 
 export type CreateEventRequest = { title: string, content: EventContentDoc, start_at: string | null, end_at: string | null, location_name: string | null, location_address: string | null, capacity: number | null, tags: Array<string>, };
 
+export type CreateMediaUploadRequest = { mime_type: string, byte_size: number, width: number | null, height: number | null, };
+
+export type CreateMediaUploadResp = { asset_id: string, storage_key: string, upload_method: string, upload_url: string, upload_headers: Array<PresignedHeader>, expires_in: number, public_url: string | null, };
+
+export type CompleteMediaUploadResp = { asset: MediaAssetResp, };
+
 export type EventContentBlock = { "type": "heading", id: string, level: number, children: Array<EventInlineNode>, } | { "type": "paragraph", id: string, children: Array<EventInlineNode>, } | { "type": "quote", id: string, children: Array<EventInlineNode>, } | { "type": "image", id: string, item: EventContentImage, caption: string | null, } | { "type": "image_grid", id: string, items: Array<EventContentImage>, } | { "type": "divider", id: string, } | { "type": "feature", id: string, feature: EventFeatureBlock, };
 
 export type EventContentDoc = { schema_version: number, blocks: Array<EventContentBlock>, };
@@ -25,6 +31,12 @@ export type ListEventsResp = { items: Array<EventResp>, next_offset: number | nu
 export type LoginRequest = { account: string, password: string, };
 
 export type LoginResp = { access_token: string, expires_in: bigint, refresh_token: string, refresh_exp: bigint, };
+
+export type MediaAssetResp = { asset_id: string, mime_type: string, byte_size: bigint, width: number | null, height: number | null, status: string, public_url: string | null, created_at: string, };
+
+export type MediaDownloadUrlResp = { asset_id: string, download_method: string, download_url: string, download_headers: Array<PresignedHeader>, expires_in: number, };
+
+export type PresignedHeader = { name: string, value: string, };
 
 export type RefreshTokenRequest = { refresh_token: string, };
 

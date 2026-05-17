@@ -3,21 +3,43 @@ name = "loop-infra"
 version.workspace = true
 edition.workspace = true
 
+[features]
+default = []
+config = ["dep:toml"]
+db = ["dep:diesel", "dep:diesel-async"]
+http-error = ["dep:axum", "dep:http", "observability"]
+mail = ["dep:lettre", "dep:tera"]
+observability = [
+    "dep:axum",
+    "dep:http",
+    "dep:opentelemetry",
+    "dep:opentelemetry-otlp",
+    "dep:opentelemetry_sdk",
+    "dep:tracing-appender",
+    "dep:tracing-opentelemetry",
+    "dep:tracing-subscriber",
+]
+redis = ["dep:deadpool-redis"]
+sms = []
+storage = ["dep:aws-sdk-s3"]
+
 [dependencies]
 anyhow = { workspace = true }
-axum = { workspace = true }
-deadpool-redis = { workspace = true }
-diesel = { workspace = true }
-diesel-async = { workspace = true }
-http = { workspace = true }
-lettre = { workspace = true }
-opentelemetry = { workspace = true }
-opentelemetry-otlp = { workspace = true }
-opentelemetry_sdk = { workspace = true }
+aws-sdk-s3 = { workspace = true, optional = true }
+axum = { workspace = true, optional = true }
+deadpool-redis = { workspace = true, optional = true }
+diesel = { workspace = true, optional = true }
+diesel-async = { workspace = true, optional = true }
+http = { workspace = true, optional = true }
+lettre = { workspace = true, optional = true }
+opentelemetry = { workspace = true, optional = true }
+opentelemetry-otlp = { workspace = true, optional = true }
+opentelemetry_sdk = { workspace = true, optional = true }
 serde = { workspace = true }
-tera = { workspace = true }
+tera = { workspace = true, optional = true }
 tokio = { workspace = true }
+toml = { workspace = true, optional = true }
 tracing = { workspace = true }
-tracing-appender = { workspace = true }
-tracing-opentelemetry = { workspace = true }
-tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true, optional = true }
+tracing-opentelemetry = { workspace = true, optional = true }
+tracing-subscriber = { workspace = true, optional = true }

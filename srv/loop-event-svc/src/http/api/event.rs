@@ -13,7 +13,7 @@ use loop_dto::{
     CreateEventRequest, EventContentBlock, EventContentDoc, EventContentImage, EventFeatureBlock,
     EventInlineNode, EventResp, EventStatus, EventTextMark, ListEventsResp,
 };
-use loop_svc_model::event::{Event, NewEvent};
+use loop_svc_model::event::{Event, MediaAsset, NewEvent};
 use serde::Deserialize;
 use std::collections::HashSet;
 
@@ -58,6 +58,8 @@ pub async fn create_event(
 ) -> Result<(StatusCode, Json<EventResp>), HttpErr> {
     let title = normalize_required_text(&req.title, MAX_TITLE_CHARS)?;
     let content_stats = validate_content(&req.content)?;
+    let asset_ids = collect_image_asset_ids(&req.content);
+    validate_referenced_media_assets(auth.user_id, &asset_ids).await?;
     let content_doc = serde_json::to_value(&req.content).internal(DB_ERROR)?;
     let tags = normalize_tags(req.tags)?;
     let start_at = parse_optional_time(req.start_at.as_deref())?;
@@ -345,6 +347,56 @@ fn validate_image_item(item: &EventContentImage, stats: &mut ContentStats) -> Re
         return Err(HttpErr::client(StatusCode::BAD_REQUEST, INVALID_INPUT));
     }
     Ok(())
+}
+
+#[tracing::instrument(
+    name = "event.media_assets.validate",
+    skip_all,
+    fields(user.id = owner_id, media.asset_count = asset_ids.len())
+)]
+async fn validate_referenced_media_assets(
+    owner_id: i64,
+    asset_ids: &HashSet<String>,
+) -> Result<(), HttpErr> {
+    if asset_ids.is_empty() {
+        return Ok(());
+    }
+
+    let ids = asset_ids.iter().cloned().collect::<Vec<_>>();
+    let rows = MediaAsset::select_uploaded_by_ids_for_owner(&ids, owner_id, &mut db_conn!())
+        .await
+        .internal(DB_ERROR)?;
+    if rows.len() != ids.len() {
+        tracing::warn!(
+            event = "event.media_assets.invalid",
+            user_id = owner_id,
+            requested_asset_count = ids.len(),
+            valid_asset_count = rows.len(),
+            "event references media assets that are missing, not uploaded, or owned by another user"
+        );
+        return Err(HttpErr::client(StatusCode::BAD_REQUEST, INVALID_INPUT));
+    }
+    Ok(())
+}
+
+fn collect_image_asset_ids(content: &EventContentDoc) -> HashSet<String> {
+    let mut asset_ids = HashSet::new();
+    for block in &content.blocks {
+        match block {
+            EventContentBlock::Image { item, .. } => {
+                asset_ids.insert(item.asset_id.trim().to_string());
+            }
+            EventContentBlock::ImageGrid { items, .. } => {
+                asset_ids.extend(items.iter().map(|item| item.asset_id.trim().to_string()));
+            }
+            EventContentBlock::Divider { .. }
+            | EventContentBlock::Feature { .. }
+            | EventContentBlock::Heading { .. }
+            | EventContentBlock::Paragraph { .. }
+            | EventContentBlock::Quote { .. } => {}
+        }
+    }
+    asset_ids
 }
 
 fn validate_image_grid(

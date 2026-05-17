@@ -1,5 +1,16 @@
+#[cfg(feature = "config")]
+pub mod config;
+#[cfg(feature = "db")]
 pub mod db;
+#[cfg(feature = "http-error")]
 pub mod http_error;
+#[cfg(feature = "mail")]
 pub mod mail;
+#[cfg(feature = "observability")]
 pub mod observability;
+#[cfg(feature = "redis")]
 pub mod redis;
+#[cfg(feature = "sms")]
+pub mod sms;
+#[cfg(feature = "storage")]
+pub mod storage;

@@ -183,4 +183,101 @@ impl MediaAsset {
             .get_result::<Self>(conn)
             .await
     }
+
+    #[tracing::instrument(
+        name = "db.media_asset.select_by_asset_id",
+        skip(conn),
+        fields(
+            db.system = "postgresql",
+            db.operation = "select",
+            db.table = "media_assets",
+            media.asset_id = %asset_id,
+        )
+    )]
+    pub async fn select_by_asset_id(
+        asset_id: &str,
+        conn: &mut DieselConn,
+    ) -> Result<Option<Self>, diesel::result::Error> {
+        media_assets::table
+            .filter(media_assets::asset_id.eq(asset_id))
+            .select(Self::as_select())
+            .first::<Self>(conn)
+            .await
+            .optional()
+    }
+
+    #[tracing::instrument(
+        name = "db.media_asset.select_uploaded_by_ids_for_owner",
+        skip(asset_ids, conn),
+        fields(
+            db.system = "postgresql",
+            db.operation = "select",
+            db.table = "media_assets",
+            user.id = owner_id,
+            media.asset_count = asset_ids.len(),
+        )
+    )]
+    pub async fn select_uploaded_by_ids_for_owner(
+        asset_ids: &[String],
+        owner_id: i64,
+        conn: &mut DieselConn,
+    ) -> Result<Vec<Self>, diesel::result::Error> {
+        media_assets::table
+            .filter(media_assets::owner_id.eq(owner_id))
+            .filter(media_assets::asset_id.eq_any(asset_ids))
+            .filter(media_assets::status.eq("uploaded"))
+            .select(Self::as_select())
+            .load::<Self>(conn)
+            .await
+    }
+
+    #[tracing::instrument(
+        name = "db.media_asset.select_uploaded_by_asset_id",
+        skip(conn),
+        fields(
+            db.system = "postgresql",
+            db.operation = "select",
+            db.table = "media_assets",
+            media.asset_id = %asset_id,
+        )
+    )]
+    pub async fn select_uploaded_by_asset_id(
+        asset_id: &str,
+        conn: &mut DieselConn,
+    ) -> Result<Option<Self>, diesel::result::Error> {
+        media_assets::table
+            .filter(media_assets::asset_id.eq(asset_id))
+            .filter(media_assets::status.eq("uploaded"))
+            .select(Self::as_select())
+            .first::<Self>(conn)
+            .await
+            .optional()
+    }
+
+    #[tracing::instrument(
+        name = "db.media_asset.mark_uploaded",
+        skip(conn),
+        fields(
+            db.system = "postgresql",
+            db.operation = "update",
+            db.table = "media_assets",
+            user.id = owner_id,
+            media.asset_id = %asset_id,
+        )
+    )]
+    pub async fn mark_uploaded(
+        asset_id: &str,
+        owner_id: i64,
+        conn: &mut DieselConn,
+    ) -> Result<Self, diesel::result::Error> {
+        diesel::update(
+            media_assets::table
+                .filter(media_assets::asset_id.eq(asset_id))
+                .filter(media_assets::owner_id.eq(owner_id)),
+        )
+        .set(media_assets::status.eq("uploaded"))
+        .returning(Self::as_returning())
+        .get_result::<Self>(conn)
+        .await
+    }
 }

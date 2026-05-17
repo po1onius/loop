@@ -1,5 +1,4 @@
 use anyhow::{Context, bail};
-use loop_infra::mail::{EmailConfig, SmtpConfig};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fs, sync::OnceLock};
 
@@ -9,10 +8,6 @@ pub struct Crypto {
     pub jwt_rsa_pri_key: String,
     pub jwt_rsa_pub_key: String,
 }
-
-#[derive(Serialize, Deserialize, Default, Debug)]
-#[serde(default)]
-pub struct Sms {}
 
 #[derive(Serialize, Deserialize, Default, Debug)]
 #[serde(default)]
@@ -27,9 +22,6 @@ pub struct Config {
     pub crypto: Crypto,
     pub access_ttl: i64,
     pub refresh_ttl: i64,
-
-    pub email: Option<EmailConfig>,
-    pub sms: Option<Sms>,
 
     pub perm: Perm,
 }
@@ -68,29 +60,7 @@ impl Config {
             bail!("refresh_ttl must be positive");
         }
 
-        if let Some(email) = &self.email {
-            ensure_non_empty("email.from", &email.from)?;
-            ensure_non_empty("email.smtp.sender", &email.smtp.sender)?;
-            ensure_non_empty("email.smtp.token", &email.smtp.token)?;
-            ensure_non_empty("email.smtp.domain", &email.smtp.domain)?;
-        }
         Ok(())
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct InfraConfig {
-    pub pg_conn: String,
-    pub redis_conn: String,
-}
-
-impl InfraConfig {
-    #[tracing::instrument(name = "config.infra.load", skip_all)]
-    pub fn from_env() -> anyhow::Result<Self> {
-        Ok(Self {
-            pg_conn: first_non_empty_env(&["LOOP_PG_CONN", "DATABASE_URL"])?,
-            redis_conn: first_non_empty_env(&["LOOP_REDIS_CONN", "REDIS_URL"])?,
-        })
     }
 }
 
@@ -148,39 +118,6 @@ fn apply_env_overrides(cfg: &mut Config) -> anyhow::Result<()> {
             serde_json::from_str(&value).context("failed to parse LOOP_ROLE_PERM_JSON")?;
     }
 
-    apply_email_env_overrides(cfg)?;
-    Ok(())
-}
-
-#[tracing::instrument(name = "config.email_env.apply", skip_all)]
-fn apply_email_env_overrides(cfg: &mut Config) -> anyhow::Result<()> {
-    let email_env_keys = [
-        "LOOP_EMAIL_FROM",
-        "LOOP_SMTP_SENDER",
-        "LOOP_SMTP_TOKEN",
-        "LOOP_SMTP_TOKEN_FILE",
-        "LOOP_SMTP_DOMAIN",
-    ];
-    if !email_env_keys.iter().any(|key| env_has_value(key)) {
-        return Ok(());
-    }
-
-    let email = cfg.email.get_or_insert_with(|| EmailConfig {
-        from: String::new(),
-        smtp: SmtpConfig::default(),
-    });
-    if let Some(value) = first_non_empty_env_opt(&["LOOP_EMAIL_FROM"]) {
-        email.from = value;
-    }
-    if let Some(value) = first_non_empty_env_opt(&["LOOP_SMTP_SENDER"]) {
-        email.smtp.sender = value;
-    }
-    if let Some(value) = value_from_env_or_file(&["LOOP_SMTP_TOKEN"], &["LOOP_SMTP_TOKEN_FILE"])? {
-        email.smtp.token = value;
-    }
-    if let Some(value) = first_non_empty_env_opt(&["LOOP_SMTP_DOMAIN"]) {
-        email.smtp.domain = value;
-    }
     Ok(())
 }
 
@@ -235,15 +172,6 @@ fn ensure_non_empty(name: &str, value: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn first_non_empty_env(keys: &[&str]) -> anyhow::Result<String> {
-    first_non_empty_env_opt(keys).ok_or_else(|| {
-        anyhow::anyhow!(
-            "missing required environment variable; set one of: {}",
-            keys.join(", ")
-        )
-    })
-}
-
 fn first_non_empty_env_opt(keys: &[&str]) -> Option<String> {
     keys.iter().find_map(|key| {
         std::env::var(key)
@@ -251,10 +179,4 @@ fn first_non_empty_env_opt(keys: &[&str]) -> Option<String> {
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
     })
-}
-
-fn env_has_value(key: &str) -> bool {
-    std::env::var(key)
-        .ok()
-        .is_some_and(|value| !value.trim().is_empty())
 }

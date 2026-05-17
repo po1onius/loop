@@ -20,6 +20,40 @@ services:
     ports:
       - "6319:6379"
 
+  minio:
+    container_name: loop-minio
+    image: docker.io/minio/minio:latest
+    command:
+      - server
+      - /data
+      - --console-address
+      - ":9001"
+    environment:
+      # Local-only credentials. Keep application credentials in
+      # deploy/local/secrets so the service uses the same secret-file path as K8s.
+      MINIO_ROOT_USER: loopadmin
+      MINIO_ROOT_PASSWORD: loopadmin123
+    volumes:
+      - loop-minio-data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+
+  minio-init:
+    container_name: loop-minio-init
+    image: docker.io/minio/mc:latest
+    depends_on:
+      - minio
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        until mc alias set local http://minio:9000 loopadmin loopadmin123; do
+          sleep 1
+        done
+        mc mb --ignore-existing local/loop-local
+        mc anonymous set download local/loop-local
+
   otel-collector:
     image: docker.io/otel/opentelemetry-collector-contrib:latest
     container_name: loop-otel-collector
@@ -104,6 +138,7 @@ services:
 volumes:
   loop-pgdata:
   loop-redis-data:
+  loop-minio-data:
   loop-tempo-data:
   loop-loki-data:
   loop-alloy-data:

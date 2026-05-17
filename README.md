@@ -28,7 +28,7 @@ app目录下，使用`react native` + typescript实现的客户端app
 
 ## K8s 配置约定
 
-后端不依赖配置中心，部署到 K8s 时使用 `ConfigMap` 管理普通配置，使用 `Secret` 管理敏感配置。`loop-event-svc` 启动时会先读取 `LOOP_CONFIG_FILE` 指向的 TOML 文件，再用环境变量或 `*_FILE` secret 文件覆盖关键字段。
+后端不依赖配置中心，部署到 K8s 时使用 `ConfigMap` 管理普通配置，使用 `Secret` 管理敏感配置。启动时基础设施配置由 `loop-infra` 统一读取和初始化，业务服务只保留 JWT、TTL、权限等业务配置。服务会先读取 `LOOP_CONFIG_FILE` 指向的 TOML 文件，再用环境变量或 `*_FILE` secret 文件覆盖关键字段。`loop-event-svc` 当前编译启用了 `mail` 和 `storage` infra feature，因此邮件和 S3 的非敏感配置必须存在，敏感凭证必须通过 Secret 注入。
 
 推荐挂载方式：
 
@@ -51,7 +51,15 @@ Secret    -> /etc/loop/secrets/*
 | `LOOP_REFRESH_TTL` | 覆盖 refresh token TTL |
 | `LOOP_PERM_VER` | 覆盖权限配置版本 |
 | `LOOP_ROLE_PERM_JSON` | 用 JSON 覆盖 `role -> permissions` 映射 |
-| `LOOP_SMTP_TOKEN_FILE` | SMTP token secret 文件 |
+| `LOOP_EMAIL_FROM` / `LOOP_SMTP_SENDER` / `LOOP_SMTP_DOMAIN` | 邮件基础配置 |
+| `LOOP_SMTP_TOKEN` / `LOOP_SMTP_TOKEN_FILE` | SMTP token，可直接传字符串或 secret 文件 |
+| `LOOP_S3_BUCKET` / `LOOP_S3_REGION` | S3 bucket 和 region |
+| `LOOP_S3_ENDPOINT_URL` | S3 兼容服务 endpoint，例如 MinIO/R2；AWS S3 可不填 |
+| `LOOP_S3_PUBLIC_BASE_URL` | 可公开访问对象时使用的 CDN 或 bucket base URL |
+| `LOOP_S3_ACCESS_KEY_ID` / `LOOP_S3_ACCESS_KEY_ID_FILE` | S3 access key id，可直接传字符串或 secret 文件 |
+| `LOOP_S3_SECRET_ACCESS_KEY` / `LOOP_S3_SECRET_ACCESS_KEY_FILE` | S3 secret access key，可直接传字符串或 secret 文件 |
+| `LOOP_S3_FORCE_PATH_STYLE` | 是否强制 path-style，MinIO 通常设为 `true` |
+| `LOOP_S3_ALLOWED_MIME_TYPES` | 允许上传的 MIME 类型，逗号分隔 |
 
 普通配置示例：
 
@@ -67,6 +75,7 @@ user = [
   "event.read",
   "event.join",
   "event.create",
+  "media.upload",
   "community.post.create",
 ]
 
@@ -75,6 +84,7 @@ organizer = [
   "event.join",
   "event.create",
   "event.update_own",
+  "media.upload",
 ]
 
 admin = [
@@ -83,15 +93,28 @@ admin = [
   "user.manage",
 ]
 
+# SMTP token 必须通过 Secret 文件或环境变量注入。
 [email]
 from = "Loop <no-reply@example.com>"
 
 [email.smtp]
 sender = "smtp-user"
 domain = "smtp.example.com"
+
+# S3 access key 和 secret access key 必须通过 Secret 文件或环境变量注入。
+[storage]
+bucket = "loop-media"
+region = "us-east-1"
+endpoint_url = "http://127.0.0.1:9000"
+public_base_url = "http://127.0.0.1:9000/loop-media"
+key_prefix = "media"
+force_path_style = true
+presign_expires_secs = 900
+max_upload_bytes = 10485760
+allowed_mime_types = ["image/jpeg", "image/png", "image/webp", "image/gif"]
 ```
 
-JWT 私钥、公钥、数据库密码、SMTP token 等敏感信息不要写入 ConfigMap，使用 K8s Secret 以环境变量或文件方式传入。
+JWT 私钥、公钥、数据库密码、SMTP token、S3 secret access key 等敏感信息不要写入 ConfigMap，使用 K8s Secret 以环境变量或文件方式传入。
 
 ## 本地开发
 
@@ -105,7 +128,9 @@ make db-migrate
 make dev-event
 ```
 
-`make local-init` 会生成本地配置示例和 `deploy/local/secrets/` 目录。需要自行放入 JWT RSA 私钥/公钥文件，并按需调整 `deploy/local/.env` 中的数据库、Redis、配置文件路径。
+`make deps-up` 会启动 Postgres、Redis 和 MinIO，并创建本地媒体 bucket `loop-local`。MinIO API 地址为 `http://127.0.0.1:9000`，控制台地址为 `http://127.0.0.1:9001`，本地账号为 `loopadmin` / `loopadmin123`。
+
+`make local-init` 会生成本地配置示例和 `deploy/local/secrets/` 目录。本地 MinIO 凭证在 `.env.example` 中直接使用字符串环境变量；需要自行放入 JWT RSA 私钥/公钥文件，并按需调整 `deploy/local/.env` 中的数据库、Redis、S3 endpoint、配置文件路径。
 
 `.env` 使用 shell `source` 加载，包含 `&`、空格等特殊字符的值需要加引号，例如 PostgreSQL URL。
 
@@ -149,6 +174,7 @@ user = [
   "event.read",
   "event.join",
   "event.create",
+  "media.upload",
   "community.post.create",
 ]
 
@@ -157,6 +183,7 @@ organizer = [
   "event.join",
   "event.create",
   "event.update_own",
+  "media.upload",
 ]
 
 admin = [

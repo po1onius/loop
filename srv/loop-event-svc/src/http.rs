@@ -3,7 +3,7 @@ pub mod middleware;
 mod util;
 
 use crate::http::{
-    api::{event, user},
+    api::{event, media, user},
     middleware::{ApiRule, RouteAccess},
 };
 use axum::{Router, routing::MethodRouter};
@@ -167,7 +167,8 @@ pub fn route(state: AppState) -> AppRoutes {
         "/loop",
         AppRoutes::empty()
             .merge(user::route(state.clone()))
-            .merge(event::route(state)),
+            .merge(event::route(state.clone()))
+            .merge(media::route(state)),
     )
 }
 
@@ -180,6 +181,7 @@ pub enum ErrorCode {
     InvalidInput,
     InvalidRefreshToken,
     JwtEncodeError,
+    MediaNotFound,
     PasswordError,
     PasswordHashError,
     PasswordVerifyError,
@@ -192,6 +194,8 @@ pub enum ErrorCode {
     RedisPoolUnavailable,
     RefreshTokenExpired,
     StalePermission,
+    StorageError,
+    StorageUnconfigured,
     TooManyRequests,
     Unauthorized,
     UserNotExist,
@@ -209,6 +213,7 @@ impl ErrorCode {
             Self::InvalidInput => "invalid_input",
             Self::InvalidRefreshToken => "invalid_refresh_token",
             Self::JwtEncodeError => "jwt_encode_error",
+            Self::MediaNotFound => "media_not_found",
             Self::PasswordError => "password_error",
             Self::PasswordHashError => "password_hash_error",
             Self::PasswordVerifyError => "password_verify_error",
@@ -221,6 +226,8 @@ impl ErrorCode {
             Self::RedisPoolUnavailable => "redis_pool_unavailable",
             Self::RefreshTokenExpired => "refresh_token_expired",
             Self::StalePermission => "stale_permission",
+            Self::StorageError => "storage_error",
+            Self::StorageUnconfigured => "storage_unconfigured",
             Self::TooManyRequests => "too_many_requests",
             Self::Unauthorized => "unauthorized",
             Self::UserNotExist => "user_not_exist",
@@ -246,6 +253,7 @@ pub mod err_key {
     pub const INVALID_INPUT: ErrorCode = ErrorCode::InvalidInput;
     pub const INVALID_REFRESH_TOKEN: ErrorCode = ErrorCode::InvalidRefreshToken;
     pub const JWT_ENCODE_ERROR: ErrorCode = ErrorCode::JwtEncodeError;
+    pub const MEDIA_NOT_FOUND: ErrorCode = ErrorCode::MediaNotFound;
     pub const PASSWORD_ERROR: ErrorCode = ErrorCode::PasswordError;
     pub const PASSWORD_HASH_ERROR: ErrorCode = ErrorCode::PasswordHashError;
     pub const PASSWORD_VERIFY_ERROR: ErrorCode = ErrorCode::PasswordVerifyError;
@@ -258,6 +266,8 @@ pub mod err_key {
     pub const REDIS_POOL_UNAVAILABLE: ErrorCode = ErrorCode::RedisPoolUnavailable;
     pub const REFRESH_TOKEN_EXPIRED: ErrorCode = ErrorCode::RefreshTokenExpired;
     pub const STALE_PERMISSION: ErrorCode = ErrorCode::StalePermission;
+    pub const STORAGE_ERROR: ErrorCode = ErrorCode::StorageError;
+    pub const STORAGE_UNCONFIGURED: ErrorCode = ErrorCode::StorageUnconfigured;
     pub const TOO_MANY_REQUESTS: ErrorCode = ErrorCode::TooManyRequests;
     pub const UNAUTHORIZED: ErrorCode = ErrorCode::Unauthorized;
     pub const USER_NOT_EXIST: ErrorCode = ErrorCode::UserNotExist;

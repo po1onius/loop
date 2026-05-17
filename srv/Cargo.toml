@@ -19,6 +19,7 @@ jsonwebtoken = { version = "*", features = ["aws_lc_rs"] }
 diesel = { version = "*", features = ["uuid", "chrono", "ipnet-address", "serde_json"] }
 diesel-async = { version = "*", features = ["postgres", "deadpool"] }
 anyhow = { version = "*" }
+aws-sdk-s3 = { version = "1" }
 uuid = { version = "*", features = ["v7", "serde"] }
 thiserror = { version = "*" }
 deadpool = { version = "*" }
@@ -47,7 +48,7 @@ dashmap = "*"
 tokio-stream = "*"
 tower-cookies = "*"
 loop-svc-model = { path = "loop-svc-model" }
-loop-infra = { path = "loop-infra" }
+loop-infra = { path = "loop-infra", default-features = false }
 time = "*"
 loop-dto = { path = "../loop-dto" }
 base64 = "*"
