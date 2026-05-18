@@ -160,6 +160,30 @@ impl Event {
             .load::<Self>(conn)
             .await
     }
+
+    #[tracing::instrument(
+        name = "db.event.select_published_by_id",
+        skip(conn),
+        fields(
+            db.system = "postgresql",
+            db.operation = "select",
+            db.table = "events",
+            event.id = event_id,
+        )
+    )]
+    pub async fn select_published_by_id(
+        event_id: i64,
+        conn: &mut DieselConn,
+    ) -> Result<Option<Self>, diesel::result::Error> {
+        // 详情页只允许读取已发布活动，避免草稿或已取消活动通过 ID 被公开访问。
+        events::table
+            .filter(events::event_id.eq(event_id))
+            .filter(events::status.eq("published"))
+            .select(Self::as_select())
+            .first::<Self>(conn)
+            .await
+            .optional()
+    }
 }
 
 impl MediaAsset {

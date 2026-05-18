@@ -3,6 +3,7 @@ import type {
   CreateMediaUploadRequest,
   CreateMediaUploadResp,
   MediaAssetResp,
+  MediaDownloadUrlResp,
   PresignedHeader,
 } from "@/lib/dto";
 import { requestJson } from "@/lib/api-client";
@@ -65,6 +66,18 @@ export async function uploadLocalImageAsset(
   );
 
   return completed.asset;
+}
+
+export function getMediaDownloadUrl(
+  assetId: string,
+): Promise<MediaDownloadUrlResp> {
+  const normalizedAssetId = assetId.trim();
+  console.info("[media-api] requesting media download url", {
+    assetId: normalizedAssetId,
+  });
+  return requestJson<undefined, MediaDownloadUrlResp>(
+    `/media/${encodeURIComponent(normalizedAssetId)}/download_url`,
+  );
 }
 
 async function readLocalBlob(input: UploadLocalImageInput): Promise<Blob> {

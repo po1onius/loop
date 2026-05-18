@@ -9,6 +9,16 @@ export function listEvents(limit = 20, offset = 0): Promise<ListEventsResp> {
   return requestJson<undefined, ListEventsResp>(`/event?${params.toString()}`);
 }
 
+export function getEvent(eventId: string): Promise<EventResp> {
+  const normalizedEventId = eventId.trim();
+  console.info("[event-api] loading event detail", {
+    eventId: normalizedEventId,
+  });
+  return requestJson<undefined, EventResp>(
+    `/event/${encodeURIComponent(normalizedEventId)}`,
+  );
+}
+
 export function createEvent(params: CreateEventRequest): Promise<EventResp> {
   console.info("[event-api] creating event", {
     titleLength: params.title.trim().length,

@@ -2,7 +2,10 @@ import { useFocusEffect } from "@react-navigation/native";
 import { router } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Animated,
+  Easing,
   FlatList,
+  Modal,
   Pressable,
   StyleSheet,
   type NativeScrollEvent,
@@ -26,9 +29,16 @@ type CarouselItem = {
 };
 
 type ListItem = {
+  description: string;
+  eventId?: string;
   id: string;
   title: string;
-  description: string;
+};
+
+type DrawerItem = {
+  id: string;
+  title: string;
+  icon: "person.text.rectangle" | "list.bullet.rectangle" | "doc.text";
 };
 
 const CAROUSEL_ITEMS: CarouselItem[] = [
@@ -80,14 +90,35 @@ const FALLBACK_ITEMS: ListItem[] = [
   },
 ];
 
+const DRAWER_ITEMS: DrawerItem[] = [
+  {
+    id: "profile",
+    title: "用户信息",
+    icon: "person.text.rectangle",
+  },
+  {
+    id: "events",
+    title: "我的活动",
+    icon: "list.bullet.rectangle",
+  },
+  {
+    id: "posts",
+    title: "我的帖子",
+    icon: "doc.text",
+  },
+];
+
 export default function HomeScreen() {
   const { width } = useWindowDimensions();
   const carouselRef = useRef<FlatList<CarouselItem>>(null);
+  const drawerTranslateX = useRef(new Animated.Value(-360)).current;
   const [activeIndex, setActiveIndex] = useState(0);
+  const [drawerVisible, setDrawerVisible] = useState(false);
   const [events, setEvents] = useState<EventResp[]>([]);
   const [loadingEvents, setLoadingEvents] = useState(false);
   const [eventsError, setEventsError] = useState("");
   const slideWidth = Math.max(width - 32, 1);
+  const drawerWidth = Math.min(Math.max(width * 0.78, 260), 320);
 
   const loadEvents = useCallback(async () => {
     setLoadingEvents(true);
@@ -122,14 +153,29 @@ export default function HomeScreen() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!drawerVisible) {
+      return;
+    }
+
+    drawerTranslateX.setValue(-drawerWidth);
+    Animated.timing(drawerTranslateX, {
+      toValue: 0,
+      duration: 220,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [drawerTranslateX, drawerVisible, drawerWidth]);
+
   const listItems = useMemo(() => {
     if (!events.length) {
       return FALLBACK_ITEMS;
     }
     return events.map((event) => ({
+      description: formatEventDescription(event),
+      eventId: event.event_id,
       id: event.event_id,
       title: event.title,
-      description: formatEventDescription(event),
     }));
   }, [events]);
 
@@ -141,11 +187,67 @@ export default function HomeScreen() {
     setActiveIndex(boundedIndex);
   };
 
+  const openUserDrawer = useCallback(() => {
+    setDrawerVisible(true);
+  }, []);
+
+  const closeUserDrawer = useCallback(() => {
+    Animated.timing(drawerTranslateX, {
+      toValue: -drawerWidth,
+      duration: 180,
+      easing: Easing.in(Easing.cubic),
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      if (finished) {
+        setDrawerVisible(false);
+      }
+    });
+  }, [drawerTranslateX, drawerWidth]);
+
+  const handleDrawerItemPress = useCallback(
+    (item: DrawerItem) => {
+      console.info("[home] user drawer item pressed", {
+        itemId: item.id,
+        title: item.title,
+      });
+      closeUserDrawer();
+    },
+    [closeUserDrawer],
+  );
+
+  const handleEventPress = useCallback((item: ListItem) => {
+    if (!item.eventId) {
+      console.info("[home] fallback event pressed without detail", {
+        itemId: item.id,
+        title: item.title,
+      });
+      setEventsError("演示活动暂无详情，请启动后端并刷新真实活动列表");
+      return;
+    }
+
+    console.info("[home] event item pressed", {
+      eventId: item.eventId,
+      title: item.title,
+    });
+    router.push(`/event/${encodeURIComponent(item.eventId)}` as never);
+  }, []);
+
   return (
     <SafeAreaView style={styles.safeArea} edges={["top", "left", "right"]}>
       <ThemedView style={styles.container}>
         <ThemedView style={styles.topSection}>
-          <ThemedText type="subtitle">活动推荐</ThemedText>
+          <View style={styles.homeHeader}>
+            <Pressable
+              accessibilityRole="button"
+              onPress={openUserDrawer}
+              style={styles.avatarButton}
+            >
+              <IconSymbol size={34} name="person.crop.circle" color="#0A7EA4" />
+            </Pressable>
+            <ThemedText type="subtitle" style={styles.homeHeaderTitle}>
+              活动推荐
+            </ThemedText>
+          </View>
           <FlatList
             ref={carouselRef}
             data={CAROUSEL_ITEMS}
@@ -204,19 +306,112 @@ export default function HomeScreen() {
             refreshing={loadingEvents}
             onRefresh={loadEvents}
             renderItem={({ item }) => (
-              <ThemedView
-                style={styles.listCard}
-                lightColor="#F3F6FA"
-                darkColor="#1E252C"
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => handleEventPress(item)}
+                style={({ pressed }) => [
+                  styles.listPressable,
+                  pressed ? styles.listPressablePressed : undefined,
+                ]}
               >
-                <ThemedText type="defaultSemiBold">{item.title}</ThemedText>
-                <ThemedText>{item.description}</ThemedText>
-              </ThemedView>
+                <ThemedView
+                  style={styles.listCard}
+                  lightColor="#F3F6FA"
+                  darkColor="#1E252C"
+                >
+                  <View style={styles.listCardHeader}>
+                    <ThemedText
+                      numberOfLines={1}
+                      type="defaultSemiBold"
+                      style={styles.listCardTitle}
+                    >
+                      {item.title}
+                    </ThemedText>
+                    <IconSymbol size={18} name="chevron.right" color="#8A94A6" />
+                  </View>
+                  <ThemedText numberOfLines={2}>{item.description}</ThemedText>
+                </ThemedView>
+              </Pressable>
             )}
           />
         </ThemedView>
+        <UserDrawer
+          drawerWidth={drawerWidth}
+          items={DRAWER_ITEMS}
+          translateX={drawerTranslateX}
+          visible={drawerVisible}
+          onClose={closeUserDrawer}
+          onItemPress={handleDrawerItemPress}
+        />
       </ThemedView>
     </SafeAreaView>
+  );
+}
+
+function UserDrawer({
+  drawerWidth,
+  items,
+  translateX,
+  visible,
+  onClose,
+  onItemPress,
+}: {
+  drawerWidth: number;
+  items: DrawerItem[];
+  translateX: Animated.Value;
+  visible: boolean;
+  onClose: () => void;
+  onItemPress: (item: DrawerItem) => void;
+}) {
+  return (
+    <Modal
+      animationType="none"
+      transparent
+      visible={visible}
+      onRequestClose={onClose}
+    >
+      <View style={styles.drawerRoot}>
+        <Pressable
+          accessibilityRole="button"
+          onPress={onClose}
+          style={styles.drawerScrim}
+        />
+        <Animated.View
+          style={[
+            styles.drawerPanel,
+            {
+              width: drawerWidth,
+              transform: [{ translateX }],
+            },
+          ]}
+        >
+          <View style={styles.drawerProfile}>
+            <IconSymbol size={48} name="person.crop.circle" color="#0A7EA4" />
+            <View style={styles.drawerProfileText}>
+              <ThemedText type="defaultSemiBold" style={styles.drawerName}>
+                Loop 用户
+              </ThemedText>
+              <ThemedText style={styles.drawerHint}>个人中心</ThemedText>
+            </View>
+          </View>
+
+          <View style={styles.drawerList}>
+            {items.map((item) => (
+              <Pressable
+                key={item.id}
+                accessibilityRole="button"
+                onPress={() => onItemPress(item)}
+                style={styles.drawerItem}
+              >
+                <IconSymbol size={22} name={item.icon} color="#0A7EA4" />
+                <ThemedText style={styles.drawerItemText}>{item.title}</ThemedText>
+                <IconSymbol size={18} name="chevron.right" color="#8A94A6" />
+              </Pressable>
+            ))}
+          </View>
+        </Animated.View>
+      </View>
+    </Modal>
   );
 }
 
@@ -255,9 +450,26 @@ const styles = StyleSheet.create({
     paddingTop: 8,
     paddingBottom: 8,
   },
+  homeHeader: {
+    minHeight: 44,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  avatarButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#EAF6FA",
+  },
+  homeHeaderTitle: {
+    flex: 1,
+  },
   carousel: {
     flex: 1,
-    marginTop: 12,
+    marginTop: 10,
   },
   slide: {
     flex: 1,
@@ -337,10 +549,82 @@ const styles = StyleSheet.create({
     paddingBottom: 24,
     gap: 10,
   },
+  listPressable: {
+    borderRadius: 12,
+  },
+  listPressablePressed: {
+    opacity: 0.72,
+  },
   listCard: {
     borderRadius: 12,
     paddingHorizontal: 14,
     paddingVertical: 12,
     gap: 4,
+  },
+  listCardHeader: {
+    minHeight: 24,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  listCardTitle: {
+    flex: 1,
+  },
+  drawerRoot: {
+    flex: 1,
+    flexDirection: "row",
+  },
+  drawerScrim: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(17, 24, 28, 0.42)",
+  },
+  drawerPanel: {
+    height: "100%",
+    paddingHorizontal: 16,
+    paddingTop: 54,
+    backgroundColor: "#FFFFFF",
+    shadowColor: "#000000",
+    shadowOpacity: 0.18,
+    shadowRadius: 16,
+    shadowOffset: { width: 4, height: 0 },
+    elevation: 12,
+  },
+  drawerProfile: {
+    minHeight: 72,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#E2E8F0",
+    paddingBottom: 16,
+  },
+  drawerProfileText: {
+    flex: 1,
+  },
+  drawerName: {
+    color: "#11181C",
+  },
+  drawerHint: {
+    marginTop: 2,
+    fontSize: 13,
+    lineHeight: 18,
+    color: "#687076",
+  },
+  drawerList: {
+    paddingTop: 12,
+    gap: 4,
+  },
+  drawerItem: {
+    minHeight: 50,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+  },
+  drawerItemText: {
+    flex: 1,
+    color: "#11181C",
+    fontWeight: "600",
   },
 });

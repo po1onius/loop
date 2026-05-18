@@ -4,7 +4,7 @@ use crate::{
 };
 use axum::{
     Json,
-    extract::{Query, State},
+    extract::{Path, Query, State},
     routing::{get, post},
 };
 use chrono::{DateTime, Utc};
@@ -124,6 +124,34 @@ pub async fn list_events(
         items,
         next_offset: has_next.then_some(offset + limit),
     }))
+}
+
+#[tracing::instrument(
+    name = "event.get",
+    skip_all,
+    fields(event.id = %event_id)
+)]
+pub async fn get_event(
+    State(_state): State<crate::http::AppState>,
+    Path(event_id): Path<String>,
+) -> Result<Json<EventResp>, HttpErr> {
+    let event_id = event_id
+        .parse::<i64>()
+        .map_err(|_| HttpErr::client(StatusCode::BAD_REQUEST, INVALID_INPUT))?;
+
+    // 详情接口与列表保持一致，只暴露已发布活动；不存在和未发布统一返回 404。
+    let event = Event::select_published_by_id(event_id, &mut db_conn!())
+        .await
+        .internal(DB_ERROR)?
+        .ok_or_else(|| HttpErr::client(StatusCode::NOT_FOUND, EVENT_NOT_FOUND))?;
+    tracing::info!(
+        event = "event.detail_loaded",
+        event_id = event.event_id,
+        creator_id = event.creator_id,
+        "event detail loaded"
+    );
+
+    Ok(Json(to_event_resp(event)?))
 }
 
 fn to_event_resp(event: Event) -> Result<EventResp, HttpErr> {
@@ -508,6 +536,7 @@ fn cover_asset_id(content: &EventContentDoc) -> Option<String> {
 pub fn route(state: crate::http::AppState) -> AppRoutes {
     AppRoutes::<crate::http::AppState>::new()
         .public(Method::GET, "/event", get(list_events))
+        .public(Method::GET, "/event/{event_id}", get(get_event))
         .protected(
             Method::POST,
             "/event",
