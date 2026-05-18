@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -11,6 +12,9 @@ import {
   TextInput,
   View,
 } from "react-native";
+import DateTimePicker, {
+  type DateTimePickerEvent,
+} from "@react-native-community/datetimepicker";
 import { SafeAreaView } from "react-native-safe-area-context";
 import WebView, { type WebViewMessageEvent } from "react-native-webview";
 
@@ -21,6 +25,8 @@ import type { CreateEventRequest, EventContentDoc } from "@/lib/dto";
 import { createEvent } from "@/lib/event-api";
 import { uploadLocalImageAsset } from "@/lib/media-api";
 import { EVENT_RICH_EDITOR_HTML } from "@/lib/rich-editor-html";
+
+type NativeDateTimePickerMode = "date" | "time" | "datetime";
 
 type EditorMessage =
   | { type: "ready" }
@@ -48,14 +54,25 @@ type UploadedImagePayload = {
   alt?: string;
 };
 
+type DateTimePickerTarget = "start" | "end";
+type CreateEventTab = "meta" | "content";
+
 export default function CreateEventScreen() {
   const webViewRef = useRef<WebView>(null);
   const pendingRequestIdRef = useRef<string | null>(null);
   const exportTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [editorReady, setEditorReady] = useState(false);
+  const [activeTab, setActiveTab] = useState<CreateEventTab>("meta");
   const [title, setTitle] = useState("");
-  const [startAtText, setStartAtText] = useState("");
-  const [endAtText, setEndAtText] = useState("");
+  const [startAt, setStartAt] = useState<Date | null>(null);
+  const [endAt, setEndAt] = useState<Date | null>(null);
+  const [dateTimePickerTarget, setDateTimePickerTarget] =
+    useState<DateTimePickerTarget | null>(null);
+  const [dateTimePickerMode, setDateTimePickerMode] =
+    useState<NativeDateTimePickerMode | null>(null);
+  const [draftDateTime, setDraftDateTime] = useState(() =>
+    createDefaultEventDate(),
+  );
   const [locationName, setLocationName] = useState("");
   const [locationAddress, setLocationAddress] = useState("");
   const [capacityText, setCapacityText] = useState("");
@@ -78,6 +95,162 @@ export default function CreateEventScreen() {
     () => editorReady && title.trim().length > 0 && !busy,
     [busy, editorReady, title],
   );
+  const pickerTitle =
+    dateTimePickerTarget === "start" ? "选择开始时间" : "选择结束时间";
+
+  const applyDateTime = useCallback(
+    (target: DateTimePickerTarget, value: Date) => {
+      const normalized = normalizePickerDate(value);
+      if (target === "start") {
+        setStartAt(normalized);
+        return;
+      }
+      setEndAt(normalized);
+    },
+    [],
+  );
+
+  const openDateTimePicker = useCallback(
+    (target: DateTimePickerTarget) => {
+      const fallback =
+        target === "start"
+          ? startAt ?? createDefaultEventDate()
+          : endAt ?? (startAt ? addHours(startAt, 2) : createDefaultEventDate());
+      setDraftDateTime(normalizePickerDate(fallback));
+      setDateTimePickerTarget(target);
+      setDateTimePickerMode(Platform.OS === "ios" ? "datetime" : "date");
+    },
+    [endAt, startAt],
+  );
+
+  const closeDateTimePicker = useCallback(() => {
+    setDateTimePickerTarget(null);
+    setDateTimePickerMode(null);
+  }, []);
+
+  const clearDateTime = useCallback((target: DateTimePickerTarget) => {
+    if (target === "start") {
+      setStartAt(null);
+      return;
+    }
+    setEndAt(null);
+  }, []);
+
+  const clearActiveDateTime = useCallback(() => {
+    if (dateTimePickerTarget) {
+      clearDateTime(dateTimePickerTarget);
+    }
+    closeDateTimePicker();
+  }, [clearDateTime, closeDateTimePicker, dateTimePickerTarget]);
+
+  const confirmDateTimePicker = useCallback(() => {
+    if (dateTimePickerTarget) {
+      applyDateTime(dateTimePickerTarget, draftDateTime);
+    }
+    closeDateTimePicker();
+  }, [applyDateTime, closeDateTimePicker, dateTimePickerTarget, draftDateTime]);
+
+  const handleDateTimePickerChange = useCallback(
+    (event: DateTimePickerEvent, selectedDate?: Date) => {
+      if (!dateTimePickerTarget) {
+        return;
+      }
+
+      if (Platform.OS === "ios") {
+        if (selectedDate) {
+          setDraftDateTime(normalizePickerDate(selectedDate));
+        }
+        return;
+      }
+
+      if (event.type === "dismissed" || !selectedDate) {
+        closeDateTimePicker();
+        return;
+      }
+
+      if (dateTimePickerMode === "date") {
+        setDraftDateTime((current) => mergeDatePart(current, selectedDate));
+        setDateTimePickerMode("time");
+        return;
+      }
+
+      if (dateTimePickerMode === "time") {
+        const selectedValue = mergeTimePart(draftDateTime, selectedDate);
+        applyDateTime(dateTimePickerTarget, selectedValue);
+        closeDateTimePicker();
+      }
+    },
+    [
+      applyDateTime,
+      closeDateTimePicker,
+      dateTimePickerMode,
+      dateTimePickerTarget,
+      draftDateTime,
+    ],
+  );
+
+  const showNativeDateTimePicker =
+    dateTimePickerTarget !== null && dateTimePickerMode !== null;
+  const androidDateTimePickerMode =
+    dateTimePickerMode === "time" ? "time" : "date";
+
+  const nativeDateTimePicker =
+    showNativeDateTimePicker && Platform.OS === "android" ? (
+      <DateTimePicker
+        value={draftDateTime}
+        mode={androidDateTimePickerMode}
+        display={androidDateTimePickerMode === "time" ? "clock" : "calendar"}
+        minuteInterval={5}
+        onChange={handleDateTimePickerChange}
+      />
+    ) : null;
+
+  const iosDateTimePicker =
+    showNativeDateTimePicker && Platform.OS === "ios" ? (
+      <Modal
+        animationType="slide"
+        transparent
+        visible
+        onRequestClose={closeDateTimePicker}
+      >
+        <View style={styles.modalBackdrop}>
+          <Pressable style={styles.modalScrim} onPress={closeDateTimePicker} />
+          <View style={styles.dateTimeSheet}>
+            <View style={styles.sheetHeader}>
+              <ThemedText type="defaultSemiBold" style={styles.sheetTitle}>
+                {pickerTitle}
+              </ThemedText>
+              <Pressable accessibilityRole="button" onPress={clearActiveDateTime}>
+                <ThemedText style={styles.clearText}>清除</ThemedText>
+              </Pressable>
+            </View>
+            <DateTimePicker
+              value={draftDateTime}
+              mode="datetime"
+              display="spinner"
+              minuteInterval={5}
+              onChange={handleDateTimePickerChange}
+            />
+            <View style={styles.sheetActions}>
+              <Pressable
+                accessibilityRole="button"
+                onPress={closeDateTimePicker}
+                style={[styles.sheetButton, styles.secondarySheetButton]}
+              >
+                <ThemedText style={styles.secondarySheetButtonText}>取消</ThemedText>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                onPress={confirmDateTimePicker}
+                style={[styles.sheetButton, styles.primarySheetButton]}
+              >
+                <ThemedText style={styles.primarySheetButtonText}>确定</ThemedText>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    ) : null;
 
   const injectUploadedImage = useCallback((payload: UploadedImagePayload) => {
     webViewRef.current?.injectJavaScript(
@@ -124,7 +297,6 @@ export default function CreateEventScreen() {
           uri: asset.uri,
           mimeType: asset.mimeType,
           fileName: asset.fileName,
-          fileSize: asset.fileSize,
           width: asset.width,
           height: asset.height,
           file: asset.file ?? null,
@@ -155,8 +327,8 @@ export default function CreateEventScreen() {
         const req = buildCreateEventRequest({
           title,
           doc,
-          startAtText,
-          endAtText,
+          startAt,
+          endAt,
           locationName,
           locationAddress,
           capacityText,
@@ -175,17 +347,19 @@ export default function CreateEventScreen() {
         router.replace("/(tabs)" as never);
       } catch (e) {
         console.warn("[create-event] event submit failed", e);
-        setError(e instanceof Error ? e.message : "发布失败");
+        const message = e instanceof Error ? e.message : "发布失败";
+        setActiveTab(tabForValidationError(message));
+        setError(message);
       } finally {
         setSubmitting(false);
       }
     },
     [
       capacityText,
-      endAtText,
+      endAt,
       locationAddress,
       locationName,
-      startAtText,
+      startAt,
       tagText,
       title,
     ],
@@ -234,10 +408,12 @@ export default function CreateEventScreen() {
 
   const handleSubmit = useCallback(() => {
     if (!title.trim()) {
+      setActiveTab("meta");
       setError("请输入任务标题");
       return;
     }
     if (!editorReady) {
+      setActiveTab("content");
       setError("编辑器尚未加载完成，请稍后再试");
       return;
     }
@@ -302,87 +478,110 @@ export default function CreateEventScreen() {
             </Pressable>
           </View>
 
-          <ScrollView
-            keyboardShouldPersistTaps="handled"
-            showsVerticalScrollIndicator={false}
-            style={styles.metaScroll}
-            contentContainerStyle={styles.metaContent}
-          >
-            <TextInput
-              style={[styles.input, styles.titleInput]}
-              placeholder="任务标题（最多 80 字）"
-              placeholderTextColor="#8A94A6"
-              value={title}
-              maxLength={80}
-              onChangeText={setTitle}
+          <View style={styles.tabBar}>
+            <CreateEventTabButton
+              active={activeTab === "meta"}
+              label="信息"
+              onPress={() => setActiveTab("meta")}
             />
-            <View style={styles.row}>
-              <TextInput
-                style={[styles.input, styles.rowInput]}
-                placeholder="开始时间，如 2026-05-17 19:30"
-                placeholderTextColor="#8A94A6"
-                value={startAtText}
-                onChangeText={setStartAtText}
-              />
-              <TextInput
-                style={[styles.input, styles.rowInput]}
-                placeholder="结束时间"
-                placeholderTextColor="#8A94A6"
-                value={endAtText}
-                onChangeText={setEndAtText}
-              />
-            </View>
-            <View style={styles.row}>
-              <TextInput
-                style={[styles.input, styles.rowInput]}
-                placeholder="地点名称"
-                placeholderTextColor="#8A94A6"
-                value={locationName}
-                onChangeText={setLocationName}
-              />
-              <TextInput
-                style={[styles.input, styles.rowInput]}
-                placeholder="人数上限"
-                placeholderTextColor="#8A94A6"
-                value={capacityText}
-                keyboardType="number-pad"
-                onChangeText={setCapacityText}
-              />
-            </View>
-            <TextInput
-              style={styles.input}
-              placeholder="详细地址"
-              placeholderTextColor="#8A94A6"
-              value={locationAddress}
-              onChangeText={setLocationAddress}
+            <CreateEventTabButton
+              active={activeTab === "content"}
+              label="正文"
+              onPress={() => setActiveTab("content")}
             />
-            <TextInput
-              style={styles.input}
-              placeholder="标签，用空格或逗号分隔"
-              placeholderTextColor="#8A94A6"
-              value={tagText}
-              onChangeText={setTagText}
-            />
-          </ScrollView>
+          </View>
 
-          <View style={styles.editorFrame}>
-            <WebView
-              ref={webViewRef}
-              source={{ html: EVENT_RICH_EDITOR_HTML }}
-              style={styles.webView}
-              originWhitelist={["*"]}
-              javaScriptEnabled
-              domStorageEnabled
-              allowFileAccess
-              allowFileAccessFromFileURLs
-              keyboardDisplayRequiresUserAction={false}
-              setSupportMultipleWindows={false}
-              onMessage={handleEditorMessage}
-              onError={(event) => {
-                console.warn("[create-event] editor webview error", event.nativeEvent);
-                setError("编辑器加载失败");
-              }}
-            />
+          <View style={styles.tabBody}>
+            <ScrollView
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+              style={[
+                styles.metaScroll,
+                activeTab !== "meta" ? styles.hiddenTab : undefined,
+              ]}
+              contentContainerStyle={styles.metaContent}
+            >
+              <TextInput
+                style={[styles.input, styles.titleInput]}
+                placeholder="任务标题（最多 80 字）"
+                placeholderTextColor="#8A94A6"
+                value={title}
+                maxLength={80}
+                onChangeText={setTitle}
+              />
+              <View style={styles.row}>
+                <DateTimeField
+                  label="开始时间"
+                  value={startAt}
+                  onPress={() => openDateTimePicker("start")}
+                  onClear={() => clearDateTime("start")}
+                  disabled={busy}
+                />
+                <DateTimeField
+                  label="结束时间"
+                  value={endAt}
+                  onPress={() => openDateTimePicker("end")}
+                  onClear={() => clearDateTime("end")}
+                  disabled={busy}
+                />
+              </View>
+              <View style={styles.row}>
+                <TextInput
+                  style={[styles.input, styles.rowInput]}
+                  placeholder="地点名称"
+                  placeholderTextColor="#8A94A6"
+                  value={locationName}
+                  onChangeText={setLocationName}
+                />
+                <TextInput
+                  style={[styles.input, styles.rowInput]}
+                  placeholder="人数上限"
+                  placeholderTextColor="#8A94A6"
+                  value={capacityText}
+                  keyboardType="number-pad"
+                  onChangeText={setCapacityText}
+                />
+              </View>
+              <TextInput
+                style={styles.input}
+                placeholder="详细地址"
+                placeholderTextColor="#8A94A6"
+                value={locationAddress}
+                onChangeText={setLocationAddress}
+              />
+              <TextInput
+                style={styles.input}
+                placeholder="标签，用空格或逗号分隔"
+                placeholderTextColor="#8A94A6"
+                value={tagText}
+                onChangeText={setTagText}
+              />
+            </ScrollView>
+
+            <View
+              style={[
+                styles.editorFrame,
+                activeTab !== "content" ? styles.hiddenTab : undefined,
+              ]}
+            >
+              <WebView
+                ref={webViewRef}
+                source={{ html: EVENT_RICH_EDITOR_HTML }}
+                style={styles.webView}
+                originWhitelist={["*"]}
+                javaScriptEnabled
+                domStorageEnabled
+                allowFileAccess
+                allowFileAccessFromFileURLs
+                keyboardDisplayRequiresUserAction={false}
+                setSupportMultipleWindows={false}
+                onMessage={handleEditorMessage}
+                onError={(event) => {
+                  console.warn("[create-event] editor webview error", event.nativeEvent);
+                  setError("编辑器加载失败");
+                }}
+              />
+            </View>
           </View>
 
           {error || status || uploadingImage ? (
@@ -395,17 +594,96 @@ export default function CreateEventScreen() {
               </ThemedText>
             </View>
           ) : null}
+
+          {nativeDateTimePicker}
+          {iosDateTimePicker}
         </ThemedView>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
 
+function CreateEventTabButton({
+  active,
+  label,
+  onPress,
+}: {
+  active: boolean;
+  label: string;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="tab"
+      accessibilityState={{ selected: active }}
+      onPress={onPress}
+      style={[styles.tabButton, active ? styles.tabButtonActive : undefined]}
+    >
+      <ThemedText
+        style={[styles.tabButtonText, active ? styles.tabButtonTextActive : undefined]}
+      >
+        {label}
+      </ThemedText>
+    </Pressable>
+  );
+}
+
+function DateTimeField({
+  label,
+  value,
+  disabled,
+  onPress,
+  onClear,
+}: {
+  label: string;
+  value: Date | null;
+  disabled: boolean;
+  onPress: () => void;
+  onClear: () => void;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      onPress={onPress}
+      disabled={disabled}
+      style={[
+        styles.timeField,
+        styles.rowInput,
+        disabled ? styles.buttonDisabled : undefined,
+      ]}
+    >
+      <ThemedText style={styles.timeFieldLabel}>{label}</ThemedText>
+      <ThemedText
+        numberOfLines={1}
+        style={[
+          styles.timeFieldValue,
+          !value ? styles.timeFieldPlaceholder : undefined,
+        ]}
+      >
+        {value ? formatLocalDateTime(value) : "请选择"}
+      </ThemedText>
+      {value ? (
+        <Pressable
+          accessibilityRole="button"
+          onPress={(event) => {
+            event.stopPropagation();
+            onClear();
+          }}
+          disabled={disabled}
+          style={styles.timeFieldClear}
+        >
+          <ThemedText style={styles.timeFieldClearText}>清除</ThemedText>
+        </Pressable>
+      ) : null}
+    </Pressable>
+  );
+}
+
 function buildCreateEventRequest({
   title,
   doc,
-  startAtText,
-  endAtText,
+  startAt,
+  endAt,
   locationName,
   locationAddress,
   capacityText,
@@ -413,8 +691,8 @@ function buildCreateEventRequest({
 }: {
   title: string;
   doc: EventContentDoc;
-  startAtText: string;
-  endAtText: string;
+  startAt: Date | null;
+  endAt: Date | null;
   locationName: string;
   locationAddress: string;
   capacityText: string;
@@ -428,17 +706,15 @@ function buildCreateEventRequest({
     throw new Error("请先填写任务正文或插入图片");
   }
 
-  const startAt = toOptionalRfc3339(startAtText, "开始时间");
-  const endAt = toOptionalRfc3339(endAtText, "结束时间");
-  if (startAt && endAt && new Date(endAt).getTime() <= new Date(startAt).getTime()) {
+  if (startAt && endAt && endAt.getTime() <= startAt.getTime()) {
     throw new Error("结束时间必须晚于开始时间");
   }
 
   return {
     title: normalizedTitle,
     content: doc,
-    start_at: startAt,
-    end_at: endAt,
+    start_at: dateToRfc3339(startAt),
+    end_at: dateToRfc3339(endAt),
     location_name: emptyToNull(locationName),
     location_address: emptyToNull(locationAddress),
     capacity: parseCapacity(capacityText),
@@ -500,18 +776,72 @@ function toNumber(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
-function toOptionalRfc3339(value: string, fieldName: string): string | null {
-  const text = value.trim();
-  if (!text) {
-    return null;
-  }
+function dateToRfc3339(value: Date | null): string | null {
+  return value ? value.toISOString() : null;
+}
 
-  const normalized = text.includes("T") ? text : text.replace(/\s+/, "T");
-  const date = new Date(normalized);
-  if (Number.isNaN(date.getTime())) {
-    throw new Error(`${fieldName}格式需为 YYYY-MM-DD HH:mm`);
+function createDefaultEventDate(): Date {
+  const next = addHours(new Date(), 1);
+  return roundToNextMinuteStep(next, 15);
+}
+
+function addHours(value: Date, hours: number): Date {
+  const next = new Date(value);
+  next.setHours(next.getHours() + hours);
+  return normalizePickerDate(next);
+}
+
+function addMinutes(value: Date, minutes: number): Date {
+  const next = new Date(value);
+  next.setMinutes(next.getMinutes() + minutes);
+  return normalizePickerDate(next);
+}
+
+function roundToNextMinuteStep(value: Date, step: number): Date {
+  const next = normalizePickerDate(value);
+  const remainder = next.getMinutes() % step;
+  if (remainder === 0) {
+    return next;
   }
-  return date.toISOString();
+  return addMinutes(next, step - remainder);
+}
+
+function normalizePickerDate(value: Date): Date {
+  const next = new Date(value);
+  next.setSeconds(0, 0);
+  return next;
+}
+
+function mergeDatePart(current: Date, selectedDate: Date): Date {
+  const next = new Date(current);
+  next.setFullYear(
+    selectedDate.getFullYear(),
+    selectedDate.getMonth(),
+    selectedDate.getDate(),
+  );
+  return normalizePickerDate(next);
+}
+
+function mergeTimePart(current: Date, selectedTime: Date): Date {
+  const next = new Date(current);
+  next.setHours(selectedTime.getHours(), selectedTime.getMinutes(), 0, 0);
+  return normalizePickerDate(next);
+}
+
+function formatLocalDateTime(value: Date): string {
+  return `${formatDate(value)} ${pad2(value.getHours())}:${pad2(value.getMinutes())}`;
+}
+
+function formatDate(value: Date): string {
+  return `${value.getFullYear()}-${pad2(value.getMonth() + 1)}-${pad2(value.getDate())}`;
+}
+
+function pad2(value: number): string {
+  return String(value).padStart(2, "0");
+}
+
+function tabForValidationError(message: string): CreateEventTab {
+  return message.includes("正文") || message.includes("图片") ? "content" : "meta";
 }
 
 function emptyToNull(value: string): string | null {
@@ -595,13 +925,48 @@ const styles = StyleSheet.create({
   buttonDisabled: {
     opacity: 0.52,
   },
+  tabBar: {
+    minHeight: 42,
+    flexDirection: "row",
+    gap: 6,
+    padding: 4,
+    borderRadius: 10,
+    backgroundColor: "#EEF3F7",
+  },
+  tabButton: {
+    flex: 1,
+    minHeight: 34,
+    borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  tabButtonActive: {
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: "#D9E0EA",
+  },
+  tabButtonText: {
+    fontSize: 14,
+    lineHeight: 20,
+    color: "#687076",
+    fontWeight: "700",
+  },
+  tabButtonTextActive: {
+    color: "#0A7EA4",
+  },
+  tabBody: {
+    flex: 1,
+    minHeight: 0,
+  },
+  hiddenTab: {
+    display: "none",
+  },
   metaScroll: {
-    flexGrow: 0,
-    maxHeight: 232,
+    flex: 1,
   },
   metaContent: {
     gap: 8,
-    paddingBottom: 2,
+    paddingBottom: 18,
   },
   row: {
     flexDirection: "row",
@@ -609,6 +974,46 @@ const styles = StyleSheet.create({
   },
   rowInput: {
     flex: 1,
+  },
+  timeField: {
+    minHeight: 56,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#CDD3DD",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    justifyContent: "center",
+    backgroundColor: "#FFFFFF",
+  },
+  timeFieldLabel: {
+    fontSize: 12,
+    lineHeight: 16,
+    color: "#687076",
+  },
+  timeFieldValue: {
+    marginTop: 2,
+    paddingRight: 34,
+    fontSize: 15,
+    lineHeight: 20,
+    color: "#11181C",
+    fontWeight: "600",
+  },
+  timeFieldPlaceholder: {
+    color: "#8A94A6",
+    fontWeight: "400",
+  },
+  timeFieldClear: {
+    position: "absolute",
+    right: 10,
+    top: 8,
+    minHeight: 26,
+    justifyContent: "center",
+  },
+  timeFieldClearText: {
+    fontSize: 12,
+    lineHeight: 16,
+    color: "#D64545",
+    fontWeight: "600",
   },
   input: {
     minHeight: 44,
@@ -656,5 +1061,66 @@ const styles = StyleSheet.create({
   errorText: {
     color: "#D64545",
     opacity: 1,
+  },
+  modalBackdrop: {
+    flex: 1,
+    justifyContent: "flex-end",
+  },
+  modalScrim: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(17, 24, 28, 0.42)",
+  },
+  dateTimeSheet: {
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 18,
+    backgroundColor: "#FFFFFF",
+    gap: 14,
+  },
+  sheetHeader: {
+    minHeight: 34,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  sheetTitle: {
+    flex: 1,
+    color: "#11181C",
+  },
+  clearText: {
+    fontSize: 14,
+    lineHeight: 20,
+    color: "#D64545",
+    fontWeight: "600",
+  },
+  sheetActions: {
+    flexDirection: "row",
+    gap: 10,
+  },
+  sheetButton: {
+    flex: 1,
+    height: 46,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  secondarySheetButton: {
+    borderWidth: 1,
+    borderColor: "#CDD3DD",
+    backgroundColor: "#FFFFFF",
+  },
+  secondarySheetButtonText: {
+    color: "#11181C",
+    fontWeight: "700",
+  },
+  primarySheetButton: {
+    backgroundColor: "#0A7EA4",
+  },
+  primarySheetButtonText: {
+    color: "#FFFFFF",
+    fontWeight: "700",
   },
 });

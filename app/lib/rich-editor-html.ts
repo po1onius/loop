@@ -36,7 +36,7 @@ export const EVENT_RICH_EDITOR_HTML = String.raw`<!doctype html>
       html,
       body {
         width: 100%;
-        min-height: 100%;
+        height: 100%;
         margin: 0;
         background: var(--bg);
         color: var(--text);
@@ -46,16 +46,21 @@ export const EVENT_RICH_EDITOR_HTML = String.raw`<!doctype html>
       }
 
       body {
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
         overscroll-behavior: contain;
       }
 
       .toolbar {
-        position: sticky;
-        top: 0;
+        flex: 0 0 auto;
         z-index: 5;
         display: flex;
+        flex-wrap: wrap;
+        align-items: center;
         gap: 6px;
-        overflow-x: auto;
+        overflow-x: hidden;
+        overflow-y: visible;
         padding: 8px;
         border-bottom: 1px solid var(--border);
         background: var(--bg);
@@ -65,9 +70,10 @@ export const EVENT_RICH_EDITOR_HTML = String.raw`<!doctype html>
       }
 
       .toolbar button {
-        flex: 0 0 auto;
+        flex: 0 1 auto;
         min-width: 38px;
         height: 34px;
+        padding: 0 10px;
         border: 1px solid var(--border);
         border-radius: 8px;
         background: var(--panel);
@@ -78,12 +84,21 @@ export const EVENT_RICH_EDITOR_HTML = String.raw`<!doctype html>
 
       .toolbar .primary {
         border-color: var(--accent);
+        background: color-mix(in srgb, var(--accent) 12%, var(--panel));
+        color: var(--accent);
+      }
+
+      .toolbar button.active {
+        border-color: var(--accent);
         background: var(--accent);
         color: #ffffff;
       }
 
       #editor {
-        min-height: calc(100vh - 52px);
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
         padding: 16px 14px 42px;
         outline: none;
         -webkit-user-select: text;
@@ -189,6 +204,7 @@ export const EVENT_RICH_EDITOR_HTML = String.raw`<!doctype html>
     <script>
       (() => {
         const editor = document.getElementById("editor");
+        const toolbarButtons = Array.from(document.querySelectorAll(".toolbar button"));
         let savedRange = null;
 
         const post = (message) => {
@@ -280,6 +296,39 @@ export const EVENT_RICH_EDITOR_HTML = String.raw`<!doctype html>
           restoreSelection();
           document.execCommand("formatBlock", false, tagName);
           saveSelection();
+          updateToolbarState();
+        };
+
+        const getCurrentBlockTag = () => {
+          const selection = window.getSelection();
+          if (!selection || selection.rangeCount === 0) {
+            return "";
+          }
+          const block = getBlockElement(selection.getRangeAt(0).commonAncestorContainer);
+          return block?.tagName || "P";
+        };
+
+        const setButtonActive = (button, active) => {
+          button.classList.toggle("active", Boolean(active));
+          button.setAttribute("aria-pressed", active ? "true" : "false");
+        };
+
+        const updateToolbarState = () => {
+          const currentBlockTag = getCurrentBlockTag();
+
+          toolbarButtons.forEach((button) => {
+            const block = button.dataset.block;
+            const command = button.dataset.command;
+            if (block) {
+              setButtonActive(button, currentBlockTag === block);
+              return;
+            }
+            if (command) {
+              setButtonActive(button, document.queryCommandState(command));
+              return;
+            }
+            setButtonActive(button, false);
+          });
         };
 
         const insertDivider = () => {
@@ -488,15 +537,20 @@ export const EVENT_RICH_EDITOR_HTML = String.raw`<!doctype html>
         };
 
         document.addEventListener("selectionchange", saveSelection);
+        document.addEventListener("selectionchange", updateToolbarState);
         editor.addEventListener("focus", saveSelection);
+        editor.addEventListener("focus", updateToolbarState);
         editor.addEventListener("keyup", saveSelection);
+        editor.addEventListener("keyup", updateToolbarState);
         editor.addEventListener("mouseup", saveSelection);
+        editor.addEventListener("mouseup", updateToolbarState);
 
         document.querySelectorAll("button[data-command]").forEach((button) => {
           button.addEventListener("click", () => {
             restoreSelection();
             document.execCommand(button.dataset.command, false);
             saveSelection();
+            updateToolbarState();
           });
         });
 
@@ -519,6 +573,7 @@ export const EVENT_RICH_EDITOR_HTML = String.raw`<!doctype html>
         };
 
         post({ type: "ready" });
+        updateToolbarState();
       })();
     </script>
   </body>

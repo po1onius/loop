@@ -11,7 +11,6 @@ export type UploadLocalImageInput = {
   uri: string;
   mimeType?: string | null;
   fileName?: string | null;
-  fileSize?: number | null;
   width?: number | null;
   height?: number | null;
   file?: Blob | null;
@@ -27,9 +26,7 @@ export async function uploadLocalImageAsset(
     input.mimeType ?? blob.type,
     input.fileName ?? input.uri,
   );
-  const byteSize = normalizeByteSize(
-    input.fileSize && input.fileSize > 0 ? input.fileSize : blob.size,
-  );
+  const byteSize = normalizeByteSize(blob.size);
   const width = normalizeDimension(input.width);
   const height = normalizeDimension(input.height);
 
