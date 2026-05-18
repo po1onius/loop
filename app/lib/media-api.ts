@@ -94,20 +94,50 @@ async function putPresignedObject(
   mimeType: string,
 ) {
   const headers = toUploadHeaders(upload.upload_headers, mimeType);
-  const resp = await fetch(upload.upload_url, {
-    method: upload.upload_method || "PUT",
-    headers,
-    body: blob,
+  const uploadMethod = upload.upload_method || "PUT";
+  const uploadOrigin = safeUrlOrigin(upload.upload_url);
+
+  console.info("[media-api] uploading media object", {
+    assetId: upload.asset_id,
+    method: uploadMethod,
+    uploadOrigin,
+    byteSize: blob.size,
   });
+
+  let resp: Response;
+  try {
+    resp = await fetch(upload.upload_url, {
+      method: uploadMethod,
+      headers,
+      body: blob,
+    });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    console.warn("[media-api] media upload network failed", {
+      assetId: upload.asset_id,
+      uploadOrigin,
+      reason,
+    });
+    throw new Error(`图片上传失败：无法连接到对象存储 ${uploadOrigin}`);
+  }
 
   if (!resp.ok) {
     const text = await safeReadResponseText(resp);
     console.warn("[media-api] media upload put failed", {
       assetId: upload.asset_id,
+      uploadOrigin,
       status: resp.status,
       reason: text,
     });
     throw new Error(text || `图片上传失败 (${resp.status})`);
+  }
+}
+
+function safeUrlOrigin(value: string): string {
+  try {
+    return new URL(value).origin;
+  } catch {
+    return "<invalid-upload-url>";
   }
 }
 

@@ -1,15 +1,38 @@
-import { Platform } from "react-native";
-
-const API_BASE_URL =
-  process.env.EXPO_PUBLIC_API_BASE_URL?.trim() ||
-  (Platform.OS === "android"
-    ? "http://10.0.2.2:3000/loop"
-    : "http://127.0.0.1:3000/loop");
+const API_BASE_URL = normalizeBaseUrl(process.env.EXPO_PUBLIC_API_BASE_URL);
 
 let accessToken: string | null = null;
 
 export function setAccessToken(token: string | null) {
   accessToken = token;
+}
+
+function normalizeBaseUrl(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  return trimmed.replace(/\/+$/, "");
+}
+
+function requireApiBaseUrl(): string {
+  if (!API_BASE_URL) {
+    throw new Error("缺少 EXPO_PUBLIC_API_BASE_URL，请按当前调试环境手动配置 API 地址");
+  }
+  return API_BASE_URL;
+}
+
+function networkErrorMessage(
+  error: unknown,
+  path: string,
+  apiBaseUrl: string,
+): string {
+  const message = error instanceof Error ? error.message : String(error);
+  console.warn("[api-client] network request failed", {
+    apiBaseUrl,
+    path,
+    reason: message,
+  });
+  return `网络请求失败：无法连接到 ${apiBaseUrl}`;
 }
 
 async function readResponseText(resp: Response): Promise<string> {
@@ -74,6 +97,7 @@ export async function requestJson<TReq, TResp>(
   options: RequestJsonOptions<TReq> = {},
 ): Promise<TResp> {
   const { method = "GET", body, auth = false } = options;
+  const apiBaseUrl = requireApiBaseUrl();
   const headers: Record<string, string> = {};
 
   if (body !== undefined) {
@@ -86,19 +110,38 @@ export async function requestJson<TReq, TResp>(
     headers.Authorization = `Bearer ${accessToken}`;
   }
 
-  const resp = await fetch(`${API_BASE_URL}${path}`, {
+  console.info("[api-client] request", {
     method,
-    headers,
-    body:
-      body === undefined
-        ? undefined
-        : JSON.stringify(body, (_key, value) =>
-            typeof value === "bigint" ? value.toString() : value,
-          ),
+    path,
+    auth,
+    apiBaseUrl,
   });
 
+  let resp: Response;
+  try {
+    resp = await fetch(`${apiBaseUrl}${path}`, {
+      method,
+      headers,
+      body:
+        body === undefined
+          ? undefined
+          : JSON.stringify(body, (_key, value) =>
+              typeof value === "bigint" ? value.toString() : value,
+            ),
+    });
+  } catch (error) {
+    throw new Error(networkErrorMessage(error, path, apiBaseUrl));
+  }
+
   if (!resp.ok) {
-    throw new Error(await readError(resp));
+    const reason = await readError(resp);
+    console.warn("[api-client] request failed", {
+      method,
+      path,
+      status: resp.status,
+      reason,
+    });
+    throw new Error(reason);
   }
 
   if (resp.status === 204 || resp.status === 205) {

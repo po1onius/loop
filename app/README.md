@@ -1,50 +1,43 @@
-# Welcome to your Expo app 👋
+# Loop App
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+React Native + Expo 客户端。
 
-## Get started
+## 本地启动
 
-1. Install dependencies
-
-   ```bash
-   npm install
-   ```
-
-2. Start the app
-
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
+先在仓库根目录启动后端依赖和事件服务：
 
 ```bash
-npm run reset-project
+make deps-up
+make db-migrate
+make dev-event
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+再启动 Expo：
 
-## Learn more
+```bash
+npx expo start
+```
 
-To learn more about developing your project with Expo, look at the following resources:
+## Android 真机 + Expo Go
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+真机不能访问电脑上的 `127.0.0.1` 或 Android 模拟器专用的 `10.0.2.2`。使用 Expo Go 真机调试时，先在 `deploy/local/.env` 中手动把本地服务地址配置成电脑局域网 IP：
 
-## Join the community
+```bash
+LOOP_HTTP_ADDR='0.0.0.0:3000'
+LOOP_S3_ENDPOINT_URL='http://<电脑局域网IP>:9000'
+LOOP_S3_PUBLIC_BASE_URL='http://<电脑局域网IP>:9000/loop-local'
+```
 
-Join our community of developers creating universal apps.
+然后启动后端：
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+```bash
+make dev-event
+```
+
+启动 Expo 前显式设置客户端 API 地址：
+
+```bash
+EXPO_PUBLIC_API_BASE_URL=http://<电脑局域网IP>:3000/loop npx expo start
+```
+
+手机和电脑需要在同一局域网内，并确认防火墙允许手机访问电脑的 `3000` 和 `9000` 端口。

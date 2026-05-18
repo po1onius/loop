@@ -130,6 +130,29 @@ make dev-event
 
 `make deps-up` 会启动 Postgres、Redis 和 MinIO，并创建本地媒体 bucket `loop-local`。MinIO API 地址为 `http://127.0.0.1:9000`，控制台地址为 `http://127.0.0.1:9001`，本地账号为 `loopadmin` / `loopadmin123`。
 
+如果使用 Android 真机上的 Expo Go 调试客户端，手机不能访问电脑上的 `127.0.0.1`。需要手动把本地服务地址配置成电脑局域网 IP，例如 `192.168.1.23`。
+
+后端监听地址需要允许局域网访问：
+
+```bash
+LOOP_HTTP_ADDR='0.0.0.0:3000'
+```
+
+MinIO 预签名上传地址也必须使用手机可访问的地址，否则插入图片会在直传对象存储时失败：
+
+```bash
+LOOP_S3_ENDPOINT_URL='http://<电脑局域网IP>:9000'
+LOOP_S3_PUBLIC_BASE_URL='http://<电脑局域网IP>:9000/loop-local'
+```
+
+启动 Expo 前显式设置 API 地址：
+
+```bash
+EXPO_PUBLIC_API_BASE_URL=http://<电脑局域网IP>:3000/loop npx expo start
+```
+
+手机和电脑需要在同一局域网内，并确认防火墙允许手机访问电脑的 `3000` 和 `9000` 端口。
+
 `make local-init` 会生成本地配置示例和 `deploy/local/secrets/` 目录。本地 MinIO 凭证在 `.env.example` 中直接使用字符串环境变量；需要自行放入 JWT RSA 私钥/公钥文件，并按需调整 `deploy/local/.env` 中的数据库、Redis、S3 endpoint、配置文件路径。
 
 `.env` 使用 shell `source` 加载，包含 `&`、空格等特殊字符的值需要加引号，例如 PostgreSQL URL。
