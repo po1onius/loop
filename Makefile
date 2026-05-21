@@ -17,9 +17,9 @@ help:
 		'  make dev-event      Run loop-event-svc with deploy/local/.env loaded' \
 		'  make deps-up        Start local Postgres, Redis and MinIO from deploy/compose.yaml' \
 		'  make deps-down      Stop local compose dependencies' \
-		'  make db-migrate     Run Diesel migrations against local Postgres' \
-		'  make db-revert      Revert the latest Diesel migration' \
-		'  make db-redo        Revert and rerun the latest Diesel migration' \
+		'  make db-migrate     Initialize local Postgres schema with Diesel' \
+		'  make db-revert      Revert the current Diesel init schema' \
+		'  make db-redo        Recreate the current Diesel init schema' \
 		'  make db-status      Show Diesel migration status' \
 		'  make dto-gen        Generate TypeScript DTO bindings for app/lib/dto.ts' \
 		'  make fmt            Format Rust workspace' \

@@ -168,13 +168,13 @@ make clippy
 make test-event
 ```
 
-数据库 schema 使用 Diesel migrations 管理，迁移文件位于 `srv/migrations/`。本地执行迁移前需要安装 Diesel CLI：
+开发阶段数据库 schema 只保留一份当前初始化 migration，迁移文件位于 `srv/migrations/`。本地执行初始化前需要安装 Diesel CLI：
 
 ```bash
 cargo install diesel_cli --no-default-features --features postgres
 ```
 
-`make db-migrate` 会读取 `deploy/local/.env` 中的 `DATABASE_URL`，未设置时使用 `LOOP_PG_CONN` 并导出为 Diesel CLI 使用的 `DATABASE_URL`。数据库表结构、索引和约束只通过 migrations 管理；后续 schema 变更请新增 migration，不要直接改历史 migration。
+`make db-migrate` 会读取 `deploy/local/.env` 中的 `DATABASE_URL`，未设置时使用 `LOOP_PG_CONN` 并导出为 Diesel CLI 使用的 `DATABASE_URL`。当前仍处于开发阶段，数据库表结构、索引和约束以这份初始化 migration 为准；后续 schema 变更直接更新初始化脚本，并重建本地数据库，避免历史 migration 引入兼容分支和冗余逻辑。
 
 ## 后端权限模型
 

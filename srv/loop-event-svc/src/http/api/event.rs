@@ -241,10 +241,7 @@ fn parse_optional_time(value: Option<&str>) -> Result<Option<DateTime<Utc>>, Htt
 }
 
 fn validate_content(content: &EventContentDoc) -> Result<ContentStats, HttpErr> {
-    if !matches!(content.schema_version, 1 | 2)
-        || content.blocks.is_empty()
-        || content.blocks.len() > MAX_BLOCKS
-    {
+    if content.blocks.is_empty() || content.blocks.len() > MAX_BLOCKS {
         return Err(HttpErr::client(StatusCode::BAD_REQUEST, INVALID_INPUT));
     }
 
@@ -552,7 +549,6 @@ mod tests {
 
     fn text_doc(text: &str) -> EventContentDoc {
         EventContentDoc {
-            schema_version: 1,
             blocks: vec![EventContentBlock::Paragraph {
                 id: "p1".to_string(),
                 children: vec![EventInlineNode::Text {

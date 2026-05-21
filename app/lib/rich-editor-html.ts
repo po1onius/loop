@@ -523,7 +523,6 @@ export const EVENT_RICH_EDITOR_HTML = String.raw`<!doctype html>
               type: "content",
               requestId,
               doc: {
-                schema_version: 2,
                 blocks,
               },
               textLength,

@@ -122,7 +122,6 @@ pub enum EventContentBlock {
 #[derive(Debug, Serialize, Deserialize, TS)]
 #[ts(export_to = "dto.ts")]
 pub struct EventContentDoc {
-    pub schema_version: u16,
     pub blocks: Vec<EventContentBlock>,
 }
 

@@ -10,7 +10,7 @@ export type CompleteMediaUploadResp = { asset: MediaAssetResp, };
 
 export type EventContentBlock = { "type": "heading", id: string, level: number, children: Array<EventInlineNode>, } | { "type": "paragraph", id: string, children: Array<EventInlineNode>, } | { "type": "quote", id: string, children: Array<EventInlineNode>, } | { "type": "image", id: string, item: EventContentImage, caption: string | null, } | { "type": "image_grid", id: string, items: Array<EventContentImage>, } | { "type": "divider", id: string, } | { "type": "feature", id: string, feature: EventFeatureBlock, };
 
-export type EventContentDoc = { schema_version: number, blocks: Array<EventContentBlock>, };
+export type EventContentDoc = { blocks: Array<EventContentBlock>, };
 
 export type EventContentImage = { asset_id: string, width: number, height: number, alt: string | null, };
 
