@@ -1,4 +1,4 @@
-const API_BASE_URL = normalizeBaseUrl(process.env["EXPO_PUBLIC_API_BASE_URL"]);
+const API_BASE_URL = normalizeBaseUrl(process.env.EXPO_PUBLIC_API_BASE_URL);
 
 let accessToken: string | null = null;
 

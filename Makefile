@@ -8,6 +8,9 @@ CARGO ?= cargo
 STANDALONE_DIR := deploy/standalone
 LOCAL_ENV ?= $(STANDALONE_DIR)/.env
 SRV_DIR := srv
+# Podman 会将无 registry 的本地镜像规范化为 localhost/...，
+# 这里固定完整镜像名，避免名称不一致导致重复构建 migrate 镜像。
+MIGRATE_IMAGE := localhost/loop-diesel-cli:standalone
 
 .PHONY: backend-up
 backend-up:
@@ -42,7 +45,10 @@ backend-up:
 	[[ -f "$${host_secrets_dir}/jwt_public.pem" ]] || { echo "missing JWT public key: $${host_secrets_dir}/jwt_public.pem"; exit 1; }; \
 	mkdir -p "$${host_log_dir}"; \
 	( cd "$(STANDALONE_DIR)" && $(COMPOSE) -f compose.yaml up -d db cache minio minio-init otel-collector tempo loki alloy prometheus grafana ); \
-	( cd "$(STANDALONE_DIR)" && $(COMPOSE) -f compose.yaml build migrate ); \
+	if ! podman image exists "$(MIGRATE_IMAGE)" >/dev/null 2>&1; then \
+		echo "missing $(MIGRATE_IMAGE), building migrate image..."; \
+		( cd "$(STANDALONE_DIR)" && $(COMPOSE) -f compose.yaml build migrate ); \
+	fi; \
 	( cd "$(STANDALONE_DIR)" && $(COMPOSE) -f compose.yaml run --rm migrate ); \
 	export DATABASE_URL="postgresql://$${PGUSER}:$${PGPASSWORD}@localhost:$${LOOP_PG_PORT:-5132}/$${PGDATABASE}"; \
 	export REDIS_URL="redis://:$${LOOP_REDIS_PASSWORD}@localhost:$${LOOP_REDIS_PORT:-6319}"; \

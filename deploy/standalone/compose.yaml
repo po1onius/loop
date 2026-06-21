@@ -63,7 +63,7 @@ services:
     build:
       context: ../..
       dockerfile: deploy/standalone/Dockerfile.migrate
-    image: loop-diesel-cli:standalone
+    image: localhost/loop-diesel-cli:standalone
     restart: "no"
     depends_on:
       - db

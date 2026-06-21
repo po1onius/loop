@@ -28,6 +28,7 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt};
 
 const DEFAULT_ENVIRONMENT: &str = "local";
+const OBSERVABILITY_ENDPOINTS: &[&str] = &["/metrics"];
 const METRIC_BUCKETS: [f64; 11] = [
     0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
 ];
@@ -147,6 +148,11 @@ pub async fn record_http_metrics(req: Request, next: Next) -> Response {
         .and_then(|value| value.to_str().ok())
         .map(str::to_string);
 
+    if should_skip_http_access_log(&path) {
+        // 观测系统会高频拉取这些端点；跳过业务访问日志和业务 HTTP 指标，避免日志自噪声。
+        return REQUEST_ID.scope(request_id, next.run(req)).await;
+    }
+
     let started_at = Instant::now();
     let _in_flight = InFlightGuard::new();
     // 保存请求级上下文，保证错误转换为响应时也能写入关联 ID。
@@ -182,6 +188,10 @@ pub async fn record_http_metrics(req: Request, next: Next) -> Response {
     );
 
     response
+}
+
+fn should_skip_http_access_log(path: &str) -> bool {
+    OBSERVABILITY_ENDPOINTS.contains(&path)
 }
 
 fn init_tracer_provider(config: &ObservabilityConfig) -> anyhow::Result<Option<SdkTracerProvider>> {
