@@ -3,6 +3,9 @@
   "main": "expo-router/entry",
   "version": "1.0.0",
   "scripts": {
+    "build:rich-editor": "node ./scripts/build-rich-editor.mjs",
+    "prestart": "npm run build:rich-editor",
+    "test:rich-editor": "npm run build:rich-editor && node ./scripts/test-rich-editor.mjs",
     "start": "expo start",
     "reset-project": "node ./scripts/reset-project.js",
     "android": "expo run:android",
@@ -16,6 +19,12 @@
     "@react-navigation/bottom-tabs": "^7.4.0",
     "@react-navigation/elements": "^2.6.3",
     "@react-navigation/native": "^7.1.8",
+    "@tiptap/core": "^3.27.1",
+    "@tiptap/extension-character-count": "^3.27.1",
+    "@tiptap/extension-link": "^3.27.1",
+    "@tiptap/extension-placeholder": "^3.27.1",
+    "@tiptap/extension-underline": "^3.27.1",
+    "@tiptap/starter-kit": "^3.27.1",
     "expo": "~54.0.34",
     "expo-constants": "~18.0.13",
     "expo-font": "~14.0.11",
@@ -42,8 +51,10 @@
   },
   "devDependencies": {
     "@types/react": "~19.1.0",
+    "esbuild": "^0.28.1",
     "eslint": "^9.25.0",
     "eslint-config-expo": "~10.0.0",
+    "jsdom": "^29.1.1",
     "typescript": "~5.9.2"
   },
   "private": true

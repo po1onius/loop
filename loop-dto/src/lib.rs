@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+pub const EVENT_CONTENT_VERSION_V1: i32 = 1;
+
 #[derive(Debug, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export_to = "dto.ts")]
@@ -122,6 +124,7 @@ pub enum EventContentBlock {
 #[derive(Debug, Serialize, Deserialize, TS)]
 #[ts(export_to = "dto.ts")]
 pub struct EventContentDoc {
+    pub version: i32,
     pub blocks: Vec<EventContentBlock>,
 }
 
@@ -140,11 +143,38 @@ pub struct CreateEventRequest {
 
 #[derive(Debug, Serialize, Deserialize, TS)]
 #[ts(export_to = "dto.ts")]
+pub struct CreateEventDraftRequest {
+    pub title: Option<String>,
+    pub content: Option<EventContentDoc>,
+    pub start_at: Option<String>,
+    pub end_at: Option<String>,
+    pub location_name: Option<String>,
+    pub location_address: Option<String>,
+    pub capacity: Option<i32>,
+    pub tags: Option<Vec<String>>,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export_to = "dto.ts")]
+pub struct UpdateEventDraftRequest {
+    pub title: String,
+    pub content: EventContentDoc,
+    pub start_at: Option<String>,
+    pub end_at: Option<String>,
+    pub location_name: Option<String>,
+    pub location_address: Option<String>,
+    pub capacity: Option<i32>,
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export_to = "dto.ts")]
 pub struct EventResp {
     pub event_id: String,
     pub creator_id: String,
     pub title: String,
     pub status: EventStatus,
+    pub content_version: i32,
     pub content: EventContentDoc,
     pub summary: String,
     pub cover_asset_id: Option<String>,

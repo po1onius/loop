@@ -1,4 +1,6 @@
 target/
+.codex-target/
 log/
+app/*.log
 deploy/local/.env
 deploy/local/secrets/

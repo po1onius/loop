@@ -1,11 +1,12 @@
 use std::{fs, io, path::PathBuf};
 
 use loop_dto::{
-    CompleteMediaUploadResp, CreateEventRequest, CreateMediaUploadRequest, CreateMediaUploadResp,
-    EventContentBlock, EventContentDoc, EventContentImage, EventFeatureBlock, EventInlineNode,
-    EventResp, EventStatus, EventTextColor, EventTextMark, ListEventsResp, LoginRequest, LoginResp,
-    MediaAssetResp, MediaDownloadUrlResp, PresignedHeader, RefreshTokenRequest, RegisterRequest,
-    SetTokenRequest, VerifyCodeRequest, VerifyCodeResp,
+    CompleteMediaUploadResp, CreateEventDraftRequest, CreateEventRequest, CreateMediaUploadRequest,
+    CreateMediaUploadResp, EventContentBlock, EventContentDoc, EventContentImage,
+    EventFeatureBlock, EventInlineNode, EventResp, EventStatus, EventTextColor, EventTextMark,
+    ListEventsResp, LoginRequest, LoginResp, MediaAssetResp, MediaDownloadUrlResp, PresignedHeader,
+    RefreshTokenRequest, RegisterRequest, SetTokenRequest, UpdateEventDraftRequest,
+    VerifyCodeRequest, VerifyCodeResp,
 };
 use ts_rs::{Config, TS};
 
@@ -20,6 +21,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut declarations = Vec::new();
 
     append::<CreateEventRequest>(&cfg, &mut declarations)?;
+    append::<CreateEventDraftRequest>(&cfg, &mut declarations)?;
+    append::<UpdateEventDraftRequest>(&cfg, &mut declarations)?;
     append::<CreateMediaUploadRequest>(&cfg, &mut declarations)?;
     append::<CreateMediaUploadResp>(&cfg, &mut declarations)?;
     append::<CompleteMediaUploadResp>(&cfg, &mut declarations)?;

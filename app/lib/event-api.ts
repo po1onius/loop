@@ -1,4 +1,10 @@
-import type { CreateEventRequest, EventResp, ListEventsResp } from "@/lib/dto";
+import type {
+  CreateEventDraftRequest,
+  CreateEventRequest,
+  EventResp,
+  ListEventsResp,
+  UpdateEventDraftRequest,
+} from "@/lib/dto";
 import { requestJson } from "@/lib/api-client";
 
 export function listEvents(limit = 20, offset = 0): Promise<ListEventsResp> {
@@ -32,4 +38,78 @@ export function createEvent(params: CreateEventRequest): Promise<EventResp> {
   });
 }
 
-export type { CreateEventRequest, EventResp, ListEventsResp };
+export function createEventDraft(
+  params: CreateEventDraftRequest,
+): Promise<EventResp> {
+  console.info("[event-api] creating event draft", {
+    titleLength: params.title?.trim().length ?? 0,
+    blockCount: params.content?.blocks.length ?? 0,
+    tagCount: params.tags?.length ?? 0,
+  });
+  return requestJson<CreateEventDraftRequest, EventResp>("/event/drafts", {
+    method: "POST",
+    auth: true,
+    body: params,
+  });
+}
+
+export function updateEventDraft(
+  eventId: string,
+  params: UpdateEventDraftRequest,
+): Promise<EventResp> {
+  const normalizedEventId = eventId.trim();
+  console.info("[event-api] updating event draft", {
+    eventId: normalizedEventId,
+    titleLength: params.title.trim().length,
+    blockCount: params.content.blocks.length,
+    tagCount: params.tags.length,
+  });
+  return requestJson<UpdateEventDraftRequest, EventResp>(
+    `/event/${encodeURIComponent(normalizedEventId)}`,
+    {
+      method: "PATCH",
+      auth: true,
+      body: params,
+    },
+  );
+}
+
+export function publishEventDraft(eventId: string): Promise<EventResp> {
+  const normalizedEventId = eventId.trim();
+  console.info("[event-api] publishing event draft", {
+    eventId: normalizedEventId,
+  });
+  return requestJson<undefined, EventResp>(
+    `/event/${encodeURIComponent(normalizedEventId)}/publish`,
+    {
+      method: "POST",
+      auth: true,
+    },
+  );
+}
+
+export function listMyEvents(
+  status?: "draft" | "published" | "cancelled",
+  limit = 20,
+  offset = 0,
+): Promise<ListEventsResp> {
+  const params = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset),
+  });
+  if (status) {
+    params.set("status", status);
+  }
+  return requestJson<undefined, ListEventsResp>(
+    `/me/events?${params.toString()}`,
+    { auth: true },
+  );
+}
+
+export type {
+  CreateEventDraftRequest,
+  CreateEventRequest,
+  EventResp,
+  ListEventsResp,
+  UpdateEventDraftRequest,
+};

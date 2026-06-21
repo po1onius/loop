@@ -5,15 +5,16 @@ use crate::{
 use axum::{
     Json,
     extract::{Path, Query, State},
-    routing::{get, post},
+    routing::{get, patch, post},
 };
 use chrono::{DateTime, Utc};
 use http::{Method, StatusCode};
 use loop_dto::{
-    CreateEventRequest, EventContentBlock, EventContentDoc, EventContentImage, EventFeatureBlock,
-    EventInlineNode, EventResp, EventStatus, EventTextMark, ListEventsResp,
+    CreateEventDraftRequest, CreateEventRequest, EVENT_CONTENT_VERSION_V1, EventContentBlock,
+    EventContentDoc, EventContentImage, EventFeatureBlock, EventInlineNode, EventResp, EventStatus,
+    EventTextMark, ListEventsResp, UpdateEventDraftRequest,
 };
-use loop_svc_model::event::{Event, MediaAsset, NewEvent};
+use loop_svc_model::event::{Event, EventDraftChanges, MediaAsset, NewEvent};
 use serde::Deserialize;
 use std::collections::HashSet;
 
@@ -39,11 +40,31 @@ pub struct ListEventsQuery {
     offset: Option<i32>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ListOwnedEventsQuery {
+    status: Option<String>,
+    limit: Option<i32>,
+    offset: Option<i32>,
+}
+
 #[derive(Debug, Default)]
 struct ContentStats {
     text_chars: usize,
     image_count: usize,
     plain_text: String,
+}
+
+struct NormalizedEventDraft {
+    title: String,
+    content: EventContentDoc,
+    content_stats: ContentStats,
+    asset_ids: HashSet<String>,
+    tags: Vec<String>,
+    start_at: Option<DateTime<Utc>>,
+    end_at: Option<DateTime<Utc>>,
+    location_name: Option<String>,
+    location_address: Option<String>,
+    capacity: Option<i32>,
 }
 
 #[tracing::instrument(
@@ -56,49 +77,144 @@ pub async fn create_event(
     auth: AuthInfo,
     Json(req): Json<CreateEventRequest>,
 ) -> Result<(StatusCode, Json<EventResp>), HttpErr> {
-    let title = normalize_required_text(&req.title, MAX_TITLE_CHARS)?;
-    let content_stats = validate_content(&req.content)?;
-    let asset_ids = collect_image_asset_ids(&req.content);
-    validate_referenced_media_assets(auth.user_id, &asset_ids).await?;
-    let content_doc = serde_json::to_value(&req.content).internal(DB_ERROR)?;
-    let tags = normalize_tags(req.tags)?;
-    let start_at = parse_optional_time(req.start_at.as_deref())?;
-    let end_at = parse_optional_time(req.end_at.as_deref())?;
-    if start_at
-        .zip(end_at)
-        .is_some_and(|(start, end)| end <= start)
-    {
-        return Err(HttpErr::client(StatusCode::BAD_REQUEST, INVALID_INPUT));
-    }
-
-    let event = NewEvent {
-        creator_id: auth.user_id,
-        title,
-        status: "published".to_string(),
-        content_doc,
-        summary: build_summary(&content_stats.plain_text),
-        cover_asset_id: cover_asset_id(&req.content),
-        start_at,
-        end_at,
-        location_name: normalize_optional_text(req.location_name, 80)?,
-        location_address: normalize_optional_text(req.location_address, 200)?,
-        capacity: validate_capacity(req.capacity)?,
-        tags,
-        published_at: Some(Utc::now()),
-    };
-
-    let event = Event::insert(event, &mut db_conn!())
-        .await
-        .internal(DB_ERROR)?;
+    let draft = normalize_publish_payload(req)?;
+    validate_referenced_media_assets(auth.user_id, &draft.asset_ids).await?;
+    let event = insert_event(auth.user_id, "published", draft, Some(Utc::now())).await?;
     tracing::Span::current().record("event.id", event.event_id);
     tracing::info!(
         event = "event.created",
         event_id = event.event_id,
         user_id = auth.user_id,
-        "event created"
+        "event created and published"
     );
 
     Ok((StatusCode::CREATED, Json(to_event_resp(event)?)))
+}
+
+#[tracing::instrument(
+    name = "event.draft.create",
+    skip_all,
+    fields(user.id = auth.user_id, event.id = tracing::field::Empty)
+)]
+pub async fn create_event_draft(
+    State(_state): State<crate::http::AppState>,
+    auth: AuthInfo,
+    Json(req): Json<CreateEventDraftRequest>,
+) -> Result<(StatusCode, Json<EventResp>), HttpErr> {
+    let draft = normalize_draft_create_payload(req)?;
+    validate_referenced_media_assets(auth.user_id, &draft.asset_ids).await?;
+    let event = insert_event(auth.user_id, "draft", draft, None).await?;
+    tracing::Span::current().record("event.id", event.event_id);
+    tracing::info!(
+        event = "event.draft_created",
+        event_id = event.event_id,
+        user_id = auth.user_id,
+        "event draft created"
+    );
+
+    Ok((StatusCode::CREATED, Json(to_event_resp(event)?)))
+}
+
+#[tracing::instrument(
+    name = "event.draft.update",
+    skip_all,
+    fields(user.id = auth.user_id, event.id = %event_id)
+)]
+pub async fn update_event_draft(
+    State(_state): State<crate::http::AppState>,
+    auth: AuthInfo,
+    Path(event_id): Path<String>,
+    Json(req): Json<UpdateEventDraftRequest>,
+) -> Result<Json<EventResp>, HttpErr> {
+    let event_id = parse_event_id(&event_id)?;
+    let draft = normalize_draft_update_payload(req)?;
+    validate_referenced_media_assets(auth.user_id, &draft.asset_ids).await?;
+    let changes = to_draft_changes(draft)?;
+    let event = Event::update_draft(event_id, auth.user_id, changes, &mut db_conn!())
+        .await
+        .map_err(map_event_mutation_error)?;
+    tracing::info!(
+        event = "event.draft_updated",
+        event_id = event.event_id,
+        user_id = auth.user_id,
+        "event draft updated"
+    );
+
+    Ok(Json(to_event_resp(event)?))
+}
+
+#[tracing::instrument(
+    name = "event.draft.publish",
+    skip_all,
+    fields(user.id = auth.user_id, event.id = %event_id)
+)]
+pub async fn publish_event_draft(
+    State(_state): State<crate::http::AppState>,
+    auth: AuthInfo,
+    Path(event_id): Path<String>,
+) -> Result<Json<EventResp>, HttpErr> {
+    let event_id = parse_event_id(&event_id)?;
+    let event = Event::select_owned_by_id(event_id, auth.user_id, &mut db_conn!())
+        .await
+        .internal(DB_ERROR)?
+        .ok_or_else(|| HttpErr::client(StatusCode::NOT_FOUND, EVENT_NOT_FOUND))?;
+    if event.status != "draft" {
+        tracing::warn!(
+            event = "event.publish.invalid_status",
+            event_id = event.event_id,
+            user_id = auth.user_id,
+            event_status = %event.status,
+            "only draft events can be published"
+        );
+        return Err(HttpErr::client(StatusCode::BAD_REQUEST, INVALID_INPUT));
+    }
+
+    let content = parse_stored_content(&event)?;
+    let title = normalize_required_text(&event.title, MAX_TITLE_CHARS)?;
+    let content_stats = validate_content_for_publish(&content)?;
+    let asset_ids = collect_image_asset_ids(&content);
+    validate_referenced_media_assets(auth.user_id, &asset_ids).await?;
+    let start_at = event.start_at;
+    let end_at = event.end_at;
+    validate_time_range(start_at, end_at)?;
+
+    let refreshed = Event::update_draft(
+        event_id,
+        auth.user_id,
+        EventDraftChanges {
+            title,
+            content_version: EVENT_CONTENT_VERSION_V1,
+            content_doc: serde_json::to_value(&content).internal(DB_ERROR)?,
+            summary: build_summary(&content_stats.plain_text),
+            cover_asset_id: cover_asset_id(&content),
+            start_at,
+            end_at,
+            location_name: event.location_name,
+            location_address: event.location_address,
+            capacity: validate_capacity(event.capacity)?,
+            tags: normalize_tags(event.tags)?,
+        },
+        &mut db_conn!(),
+    )
+    .await
+    .map_err(map_event_mutation_error)?;
+
+    let event = Event::publish_draft(
+        refreshed.event_id,
+        auth.user_id,
+        Utc::now(),
+        &mut db_conn!(),
+    )
+    .await
+    .map_err(map_event_mutation_error)?;
+    tracing::info!(
+        event = "event.draft_published",
+        event_id = event.event_id,
+        user_id = auth.user_id,
+        "event draft published"
+    );
+
+    Ok(Json(to_event_resp(event)?))
 }
 
 #[tracing::instrument(name = "event.list", skip_all)]
@@ -126,6 +242,39 @@ pub async fn list_events(
     }))
 }
 
+#[tracing::instrument(name = "event.owned.list", skip_all, fields(user.id = auth.user_id))]
+pub async fn list_owned_events(
+    State(_state): State<crate::http::AppState>,
+    auth: AuthInfo,
+    Query(query): Query<ListOwnedEventsQuery>,
+) -> Result<Json<ListEventsResp>, HttpErr> {
+    let limit = query
+        .limit
+        .unwrap_or(DEFAULT_LIST_LIMIT)
+        .clamp(1, MAX_LIST_LIMIT);
+    let offset = query.offset.unwrap_or(0).max(0);
+    let status = parse_optional_status(query.status.as_deref())?;
+    let rows = Event::select_owned(
+        auth.user_id,
+        status.as_deref(),
+        i64::from(limit),
+        i64::from(offset),
+        &mut db_conn!(),
+    )
+    .await
+    .internal(DB_ERROR)?;
+    let has_next = rows.len() == limit as usize;
+    let items = rows
+        .into_iter()
+        .map(to_event_resp)
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(Json(ListEventsResp {
+        items,
+        next_offset: has_next.then_some(offset + limit),
+    }))
+}
+
 #[tracing::instrument(
     name = "event.get",
     skip_all,
@@ -135,11 +284,9 @@ pub async fn get_event(
     State(_state): State<crate::http::AppState>,
     Path(event_id): Path<String>,
 ) -> Result<Json<EventResp>, HttpErr> {
-    let event_id = event_id
-        .parse::<i64>()
-        .map_err(|_| HttpErr::client(StatusCode::BAD_REQUEST, INVALID_INPUT))?;
+    let event_id = parse_event_id(&event_id)?;
 
-    // 详情接口与列表保持一致，只暴露已发布活动；不存在和未发布统一返回 404。
+    // 公开详情接口只允许读取已发布活动，避免草稿或已取消活动通过 ID 被公开访问。
     let event = Event::select_published_by_id(event_id, &mut db_conn!())
         .await
         .internal(DB_ERROR)?
@@ -155,8 +302,7 @@ pub async fn get_event(
 }
 
 fn to_event_resp(event: Event) -> Result<EventResp, HttpErr> {
-    let content =
-        serde_json::from_value::<EventContentDoc>(event.content_doc).internal(DB_ERROR)?;
+    let content = parse_stored_content(&event)?;
     Ok(EventResp {
         event_id: event.event_id.to_string(),
         creator_id: event.creator_id.to_string(),
@@ -172,6 +318,7 @@ fn to_event_resp(event: Event) -> Result<EventResp, HttpErr> {
                 ));
             }
         },
+        content_version: event.content_version,
         content,
         summary: event.summary,
         cover_asset_id: event.cover_asset_id,
@@ -184,6 +331,148 @@ fn to_event_resp(event: Event) -> Result<EventResp, HttpErr> {
         created_at: event.created_at.to_rfc3339(),
         updated_at: event.updated_at.to_rfc3339(),
     })
+}
+
+async fn insert_event(
+    creator_id: i64,
+    status: &str,
+    draft: NormalizedEventDraft,
+    published_at: Option<DateTime<Utc>>,
+) -> Result<Event, HttpErr> {
+    let event = NewEvent {
+        creator_id,
+        title: draft.title,
+        status: status.to_string(),
+        content_version: EVENT_CONTENT_VERSION_V1,
+        content_doc: serde_json::to_value(&draft.content).internal(DB_ERROR)?,
+        summary: build_summary(&draft.content_stats.plain_text),
+        cover_asset_id: cover_asset_id(&draft.content),
+        start_at: draft.start_at,
+        end_at: draft.end_at,
+        location_name: draft.location_name,
+        location_address: draft.location_address,
+        capacity: draft.capacity,
+        tags: draft.tags,
+        published_at,
+    };
+
+    Event::insert(event, &mut db_conn!())
+        .await
+        .internal(DB_ERROR)
+}
+
+fn normalize_publish_payload(req: CreateEventRequest) -> Result<NormalizedEventDraft, HttpErr> {
+    normalize_full_payload(
+        req.title,
+        req.content,
+        req.start_at,
+        req.end_at,
+        req.location_name,
+        req.location_address,
+        req.capacity,
+        req.tags,
+        ContentValidationMode::Publish,
+    )
+}
+
+fn normalize_draft_update_payload(
+    req: UpdateEventDraftRequest,
+) -> Result<NormalizedEventDraft, HttpErr> {
+    normalize_full_payload(
+        req.title,
+        req.content,
+        req.start_at,
+        req.end_at,
+        req.location_name,
+        req.location_address,
+        req.capacity,
+        req.tags,
+        ContentValidationMode::Draft,
+    )
+}
+
+fn normalize_draft_create_payload(
+    req: CreateEventDraftRequest,
+) -> Result<NormalizedEventDraft, HttpErr> {
+    normalize_full_payload(
+        req.title.unwrap_or_default(),
+        req.content.unwrap_or_else(empty_content_doc),
+        req.start_at,
+        req.end_at,
+        req.location_name,
+        req.location_address,
+        req.capacity,
+        req.tags.unwrap_or_default(),
+        ContentValidationMode::Draft,
+    )
+}
+
+fn normalize_full_payload(
+    title: String,
+    content: EventContentDoc,
+    start_at: Option<String>,
+    end_at: Option<String>,
+    location_name: Option<String>,
+    location_address: Option<String>,
+    capacity: Option<i32>,
+    tags: Vec<String>,
+    mode: ContentValidationMode,
+) -> Result<NormalizedEventDraft, HttpErr> {
+    let title = match mode {
+        ContentValidationMode::Draft => normalize_draft_title(title)?,
+        ContentValidationMode::Publish => normalize_required_text(&title, MAX_TITLE_CHARS)?,
+    };
+    validate_content_version(&content)?;
+    let content_stats = match mode {
+        ContentValidationMode::Draft => validate_content_for_draft(&content)?,
+        ContentValidationMode::Publish => validate_content_for_publish(&content)?,
+    };
+    let start_at = parse_optional_time(start_at.as_deref())?;
+    let end_at = parse_optional_time(end_at.as_deref())?;
+    validate_time_range(start_at, end_at)?;
+
+    Ok(NormalizedEventDraft {
+        asset_ids: collect_image_asset_ids(&content),
+        content,
+        content_stats,
+        title,
+        tags: normalize_tags(tags)?,
+        start_at,
+        end_at,
+        location_name: normalize_optional_text(location_name, 80)?,
+        location_address: normalize_optional_text(location_address, 200)?,
+        capacity: validate_capacity(capacity)?,
+    })
+}
+
+fn to_draft_changes(draft: NormalizedEventDraft) -> Result<EventDraftChanges, HttpErr> {
+    Ok(EventDraftChanges {
+        title: draft.title,
+        content_version: EVENT_CONTENT_VERSION_V1,
+        content_doc: serde_json::to_value(&draft.content).internal(DB_ERROR)?,
+        summary: build_summary(&draft.content_stats.plain_text),
+        cover_asset_id: cover_asset_id(&draft.content),
+        start_at: draft.start_at,
+        end_at: draft.end_at,
+        location_name: draft.location_name,
+        location_address: draft.location_address,
+        capacity: draft.capacity,
+        tags: draft.tags,
+    })
+}
+
+#[derive(Clone, Copy)]
+enum ContentValidationMode {
+    Draft,
+    Publish,
+}
+
+fn normalize_draft_title(value: String) -> Result<String, HttpErr> {
+    let normalized = value.trim().to_string();
+    if normalized.chars().count() > MAX_TITLE_CHARS {
+        return Err(HttpErr::client(StatusCode::BAD_REQUEST, INVALID_INPUT));
+    }
+    Ok(normalized)
 }
 
 fn normalize_required_text(value: &str, max_chars: usize) -> Result<String, HttpErr> {
@@ -240,11 +529,69 @@ fn parse_optional_time(value: Option<&str>) -> Result<Option<DateTime<Utc>>, Htt
         .map_err(|_| HttpErr::client(StatusCode::BAD_REQUEST, INVALID_INPUT))
 }
 
-fn validate_content(content: &EventContentDoc) -> Result<ContentStats, HttpErr> {
+fn validate_time_range(
+    start_at: Option<DateTime<Utc>>,
+    end_at: Option<DateTime<Utc>>,
+) -> Result<(), HttpErr> {
+    if start_at
+        .zip(end_at)
+        .is_some_and(|(start, end)| end <= start)
+    {
+        return Err(HttpErr::client(StatusCode::BAD_REQUEST, INVALID_INPUT));
+    }
+    Ok(())
+}
+
+fn parse_stored_content(event: &Event) -> Result<EventContentDoc, HttpErr> {
+    let content =
+        serde_json::from_value::<EventContentDoc>(event.content_doc.clone()).internal(DB_ERROR)?;
+    validate_content_version(&content)?;
+    Ok(content)
+}
+
+fn validate_content_version(content: &EventContentDoc) -> Result<(), HttpErr> {
+    if content.version != EVENT_CONTENT_VERSION_V1 {
+        tracing::warn!(
+            event = "event.content_version.unsupported",
+            content_version = content.version,
+            supported_version = EVENT_CONTENT_VERSION_V1,
+            "unsupported event content version"
+        );
+        return Err(HttpErr::client(StatusCode::BAD_REQUEST, INVALID_INPUT));
+    }
+    Ok(())
+}
+
+fn empty_content_doc() -> EventContentDoc {
+    EventContentDoc {
+        version: EVENT_CONTENT_VERSION_V1,
+        blocks: Vec::new(),
+    }
+}
+
+fn validate_content_for_draft(content: &EventContentDoc) -> Result<ContentStats, HttpErr> {
+    if content.blocks.len() > MAX_BLOCKS {
+        return Err(HttpErr::client(StatusCode::BAD_REQUEST, INVALID_INPUT));
+    }
+    validate_content_blocks(content, false)
+}
+
+fn validate_content_for_publish(content: &EventContentDoc) -> Result<ContentStats, HttpErr> {
     if content.blocks.is_empty() || content.blocks.len() > MAX_BLOCKS {
         return Err(HttpErr::client(StatusCode::BAD_REQUEST, INVALID_INPUT));
     }
 
+    let stats = validate_content_blocks(content, true)?;
+    if stats.text_chars == 0 && stats.image_count == 0 {
+        return Err(HttpErr::client(StatusCode::BAD_REQUEST, INVALID_INPUT));
+    }
+    Ok(stats)
+}
+
+fn validate_content_blocks(
+    content: &EventContentDoc,
+    require_complete_text_blocks: bool,
+) -> Result<ContentStats, HttpErr> {
     let mut stats = ContentStats::default();
     let mut block_ids = HashSet::new();
     for block in &content.blocks {
@@ -258,15 +605,15 @@ fn validate_content(content: &EventContentDoc) -> Result<ContentStats, HttpErr> 
                 if !(1..=3).contains(level) {
                     return Err(HttpErr::client(StatusCode::BAD_REQUEST, INVALID_INPUT));
                 }
-                validate_text_children(children, &mut stats)?;
+                validate_text_children(children, &mut stats, require_complete_text_blocks)?;
             }
             EventContentBlock::Paragraph { id, children } => {
                 validate_block_id(id, &mut block_ids)?;
-                validate_text_children(children, &mut stats)?;
+                validate_text_children(children, &mut stats, require_complete_text_blocks)?;
             }
             EventContentBlock::Quote { id, children } => {
                 validate_block_id(id, &mut block_ids)?;
-                validate_text_children(children, &mut stats)?;
+                validate_text_children(children, &mut stats, require_complete_text_blocks)?;
             }
             EventContentBlock::Image { id, item, caption } => {
                 validate_block_id(id, &mut block_ids)?;
@@ -287,9 +634,6 @@ fn validate_content(content: &EventContentDoc) -> Result<ContentStats, HttpErr> 
         }
     }
 
-    if stats.text_chars == 0 && stats.image_count == 0 {
-        return Err(HttpErr::client(StatusCode::BAD_REQUEST, INVALID_INPUT));
-    }
     Ok(stats)
 }
 
@@ -304,8 +648,12 @@ fn validate_block_id(id: &str, seen: &mut HashSet<String>) -> Result<(), HttpErr
 fn validate_text_children(
     children: &[EventInlineNode],
     stats: &mut ContentStats,
+    require_complete_text_blocks: bool,
 ) -> Result<(), HttpErr> {
-    if children.is_empty() || children.len() > MAX_INLINE_NODES_PER_PARAGRAPH {
+    if children.len() > MAX_INLINE_NODES_PER_PARAGRAPH {
+        return Err(HttpErr::client(StatusCode::BAD_REQUEST, INVALID_INPUT));
+    }
+    if require_complete_text_blocks && children.is_empty() {
         return Err(HttpErr::client(StatusCode::BAD_REQUEST, INVALID_INPUT));
     }
 
@@ -530,15 +878,63 @@ fn cover_asset_id(content: &EventContentDoc) -> Option<String> {
     })
 }
 
+fn parse_event_id(value: &str) -> Result<i64, HttpErr> {
+    value
+        .parse::<i64>()
+        .map_err(|_| HttpErr::client(StatusCode::BAD_REQUEST, INVALID_INPUT))
+}
+
+fn parse_optional_status(value: Option<&str>) -> Result<Option<String>, HttpErr> {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    let normalized = value.to_ascii_lowercase();
+    match normalized.as_str() {
+        "draft" | "published" | "cancelled" => Ok(Some(normalized)),
+        _ => Err(HttpErr::client(StatusCode::BAD_REQUEST, INVALID_INPUT)),
+    }
+}
+
+fn map_event_mutation_error(err: diesel::result::Error) -> HttpErr {
+    match err {
+        diesel::result::Error::NotFound => HttpErr::client(StatusCode::NOT_FOUND, EVENT_NOT_FOUND),
+        err => HttpErr::internal(DB_ERROR, err),
+    }
+}
+
 pub fn route(state: crate::http::AppState) -> AppRoutes {
     AppRoutes::<crate::http::AppState>::new()
         .public(Method::GET, "/event", get(list_events))
         .public(Method::GET, "/event/{event_id}", get(get_event))
         .protected(
+            Method::GET,
+            "/me/events",
+            EVENT_CREATE_PERMISSION,
+            get(list_owned_events),
+        )
+        .protected(
             Method::POST,
             "/event",
             EVENT_CREATE_PERMISSION,
             post(create_event),
+        )
+        .protected(
+            Method::POST,
+            "/event/drafts",
+            EVENT_CREATE_PERMISSION,
+            post(create_event_draft),
+        )
+        .protected(
+            Method::PATCH,
+            "/event/{event_id}",
+            EVENT_CREATE_PERMISSION,
+            patch(update_event_draft),
+        )
+        .protected(
+            Method::POST,
+            "/event/{event_id}/publish",
+            EVENT_CREATE_PERMISSION,
+            post(publish_event_draft),
         )
         .with_state(state)
 }
@@ -549,6 +945,7 @@ mod tests {
 
     fn text_doc(text: &str) -> EventContentDoc {
         EventContentDoc {
+            version: EVENT_CONTENT_VERSION_V1,
             blocks: vec![EventContentBlock::Paragraph {
                 id: "p1".to_string(),
                 children: vec![EventInlineNode::Text {
@@ -560,14 +957,29 @@ mod tests {
     }
 
     #[test]
-    fn validate_content_accepts_text_doc() {
-        let stats = validate_content(&text_doc("活动介绍")).expect("content should be valid");
+    fn validate_content_accepts_text_doc_for_publish() {
+        let stats =
+            validate_content_for_publish(&text_doc("活动介绍")).expect("content should be valid");
         assert_eq!(stats.text_chars, 4);
         assert_eq!(stats.image_count, 0);
     }
 
     #[test]
-    fn validate_content_rejects_empty_text() {
-        validate_content(&text_doc("   ")).expect_err("empty content should be rejected");
+    fn validate_content_rejects_empty_text_for_publish() {
+        validate_content_for_publish(&text_doc("   "))
+            .expect_err("empty content should be rejected");
+    }
+
+    #[test]
+    fn validate_content_allows_empty_draft() {
+        let stats =
+            validate_content_for_draft(&empty_content_doc()).expect("empty draft should be valid");
+        assert_eq!(stats.text_chars, 0);
+        assert_eq!(stats.image_count, 0);
+    }
+
+    #[test]
+    fn parse_optional_status_rejects_unknown_status() {
+        parse_optional_status(Some("archived")).expect_err("unknown status should be rejected");
     }
 }

@@ -1,0 +1,39 @@
+# 版本控制与本地工具状态不需要进入镜像构建上下文。
+.git/
+.codex/
+.codex-target/
+.agents/
+
+# 本地环境变量和密钥必须只在部署时挂载或注入，禁止发送到 build context。
+.env
+.env.*
+**/.env
+**/.env.*
+!**/.env.example
+deploy/**/secrets/**
+
+# Rust / Node / Expo 等构建产物和依赖缓存体积较大，镜像构建会在容器内重新生成。
+**/target/
+**/node_modules/
+app/.expo/
+app/.expo-shared/
+app/dist/
+app/build/
+
+# 日志、临时文件和测试覆盖率产物属于运行时或本机状态。
+log/
+logs/
+srv/log/
+**/*.log
+**/*.tmp
+**/*.temp
+coverage/
+**/.nyc_output/
+
+# 编辑器和系统生成文件。
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db

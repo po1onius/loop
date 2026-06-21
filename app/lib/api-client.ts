@@ -87,7 +87,7 @@ function parseJsonResponse<TResp>(text: string): TResp {
 }
 
 export type RequestJsonOptions<TReq> = {
-  method?: "GET" | "POST";
+  method?: "GET" | "POST" | "PATCH";
   body?: TReq;
   auth?: boolean;
 };

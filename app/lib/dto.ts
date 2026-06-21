@@ -2,6 +2,10 @@
 
 export type CreateEventRequest = { title: string, content: EventContentDoc, start_at: string | null, end_at: string | null, location_name: string | null, location_address: string | null, capacity: number | null, tags: Array<string>, };
 
+export type CreateEventDraftRequest = { title: string | null, content: EventContentDoc | null, start_at: string | null, end_at: string | null, location_name: string | null, location_address: string | null, capacity: number | null, tags: Array<string> | null, };
+
+export type UpdateEventDraftRequest = { title: string, content: EventContentDoc, start_at: string | null, end_at: string | null, location_name: string | null, location_address: string | null, capacity: number | null, tags: Array<string>, };
+
 export type CreateMediaUploadRequest = { mime_type: string, byte_size: number, width: number | null, height: number | null, };
 
 export type CreateMediaUploadResp = { asset_id: string, storage_key: string, upload_method: string, upload_url: string, upload_headers: Array<PresignedHeader>, expires_in: number, public_url: string | null, };
@@ -10,7 +14,7 @@ export type CompleteMediaUploadResp = { asset: MediaAssetResp, };
 
 export type EventContentBlock = { "type": "heading", id: string, level: number, children: Array<EventInlineNode>, } | { "type": "paragraph", id: string, children: Array<EventInlineNode>, } | { "type": "quote", id: string, children: Array<EventInlineNode>, } | { "type": "image", id: string, item: EventContentImage, caption: string | null, } | { "type": "image_grid", id: string, items: Array<EventContentImage>, } | { "type": "divider", id: string, } | { "type": "feature", id: string, feature: EventFeatureBlock, };
 
-export type EventContentDoc = { blocks: Array<EventContentBlock>, };
+export type EventContentDoc = { version: number, blocks: Array<EventContentBlock>, };
 
 export type EventContentImage = { asset_id: string, width: number, height: number, alt: string | null, };
 
@@ -18,7 +22,7 @@ export type EventFeatureBlock = { "feature_type": "schedule", title: string, ite
 
 export type EventInlineNode = { "type": "text", text: string, marks: Array<EventTextMark>, } | { "type": "hashtag", text: string, tag_id: string | null, } | { "type": "mention", user_id: string, label: string, } | { "type": "link", text: string, url: string, };
 
-export type EventResp = { event_id: string, creator_id: string, title: string, status: EventStatus, content: EventContentDoc, summary: string, cover_asset_id: string | null, start_at: string | null, end_at: string | null, location_name: string | null, location_address: string | null, capacity: number | null, tags: Array<string>, created_at: string, updated_at: string, };
+export type EventResp = { event_id: string, creator_id: string, title: string, status: EventStatus, content_version: number, content: EventContentDoc, summary: string, cover_asset_id: string | null, start_at: string | null, end_at: string | null, location_name: string | null, location_address: string | null, capacity: number | null, tags: Array<string>, created_at: string, updated_at: string, };
 
 export type EventStatus = "draft" | "published" | "cancelled";
 

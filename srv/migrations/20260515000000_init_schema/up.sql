@@ -74,6 +74,7 @@ CREATE TABLE events (
     creator_id BIGINT NOT NULL,
     title TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'published',
+    content_version INTEGER NOT NULL DEFAULT 1,
     content_doc JSONB NOT NULL,
     summary TEXT NOT NULL DEFAULT '',
     cover_asset_id TEXT,
@@ -86,9 +87,10 @@ CREATE TABLE events (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     published_at TIMESTAMPTZ,
-    CONSTRAINT events_title_not_empty CHECK (length(btrim(title)) > 0),
+    CONSTRAINT events_title_required_when_not_draft CHECK (status = 'draft' OR length(btrim(title)) > 0),
     CONSTRAINT events_title_len CHECK (char_length(title) <= 80),
     CONSTRAINT events_status_allowed CHECK (status IN ('draft', 'published', 'cancelled')),
+    CONSTRAINT events_content_version_supported CHECK (content_version = 1),
     CONSTRAINT events_content_doc_blocks CHECK (jsonb_typeof(content_doc->'blocks') = 'array'),
     CONSTRAINT events_time_range_valid CHECK (end_at IS NULL OR start_at IS NULL OR end_at > start_at),
     CONSTRAINT events_capacity_positive CHECK (capacity IS NULL OR capacity > 0)
@@ -99,6 +101,9 @@ ON events(status, created_at DESC);
 
 CREATE INDEX idx_events_creator_id_created_at
 ON events(creator_id, created_at DESC);
+
+CREATE INDEX idx_events_creator_id_updated_at
+ON events(creator_id, updated_at DESC);
 
 CREATE INDEX idx_events_cover_asset_id
 ON events(cover_asset_id)

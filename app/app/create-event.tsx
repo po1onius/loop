@@ -21,8 +21,16 @@ import WebView, { type WebViewMessageEvent } from "react-native-webview";
 import { ThemedText } from "@/components/themed-text";
 import { ThemedView } from "@/components/themed-view";
 import { IconSymbol } from "@/components/ui/icon-symbol";
-import type { CreateEventRequest, EventContentDoc } from "@/lib/dto";
-import { createEvent } from "@/lib/event-api";
+import type {
+  CreateEventDraftRequest,
+  EventContentDoc,
+  UpdateEventDraftRequest,
+} from "@/lib/dto";
+import {
+  createEventDraft,
+  publishEventDraft,
+  updateEventDraft,
+} from "@/lib/event-api";
 import { uploadLocalImageAsset } from "@/lib/media-api";
 import { EVENT_RICH_EDITOR_HTML } from "@/lib/rich-editor-html";
 
@@ -56,12 +64,26 @@ type UploadedImagePayload = {
 
 type DateTimePickerTarget = "start" | "end";
 type CreateEventTab = "meta" | "content";
+type ExportPurpose = "autosave" | "publish";
+
+const EVENT_CONTENT_VERSION = 1;
+const AUTOSAVE_DEBOUNCE_MS = 1500;
+const AUTOSAVE_INTERVAL_MS = 15000;
 
 export default function CreateEventScreen() {
   const webViewRef = useRef<WebView>(null);
   const pendingRequestIdRef = useRef<string | null>(null);
+  const pendingExportPurposeRef = useRef<ExportPurpose | null>(null);
   const exportTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autosaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autosaveIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const mountedRef = useRef(true);
+  const draftWorkCountRef = useRef(0);
+  const draftEventIdRef = useRef<string | null>(null);
+  const draftCreatePromiseRef = useRef<Promise<string> | null>(null);
+  const lastContentDocRef = useRef<EventContentDoc>(createEmptyContentDoc());
   const [editorReady, setEditorReady] = useState(false);
+  const [draftEventId, setDraftEventId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<CreateEventTab>("meta");
   const [title, setTitle] = useState("");
   const [startAt, setStartAt] = useState<Date | null>(null);
@@ -80,23 +102,50 @@ export default function CreateEventScreen() {
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
   const [uploadingImage, setUploadingImage] = useState(false);
+  const [savingDraft, setSavingDraft] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     return () => {
+      mountedRef.current = false;
       if (exportTimeoutRef.current) {
         clearTimeout(exportTimeoutRef.current);
+      }
+      if (autosaveTimeoutRef.current) {
+        clearTimeout(autosaveTimeoutRef.current);
+      }
+      if (autosaveIntervalRef.current) {
+        clearInterval(autosaveIntervalRef.current);
       }
     };
   }, []);
 
-  const busy = uploadingImage || submitting;
+  const busy = uploadingImage || submitting || savingDraft;
+  const statusMessage = error
+    ? error
+    : savingDraft
+      ? "正在保存草稿..."
+      : status || (draftEventId ? `草稿 ${draftEventId} 已就绪` : "");
   const canSubmit = useMemo(
     () => editorReady && title.trim().length > 0 && !busy,
     [busy, editorReady, title],
   );
   const pickerTitle =
     dateTimePickerTarget === "start" ? "选择开始时间" : "选择结束时间";
+
+  const beginDraftWork = useCallback(() => {
+    draftWorkCountRef.current += 1;
+    if (mountedRef.current) {
+      setSavingDraft(true);
+    }
+  }, []);
+
+  const endDraftWork = useCallback(() => {
+    draftWorkCountRef.current = Math.max(0, draftWorkCountRef.current - 1);
+    if (draftWorkCountRef.current === 0 && mountedRef.current) {
+      setSavingDraft(false);
+    }
+  }, []);
 
   const applyDateTime = useCallback(
     (target: DateTimePickerTarget, value: Date) => {
@@ -252,6 +301,270 @@ export default function CreateEventScreen() {
       </Modal>
     ) : null;
 
+  const startRemoteDraftCreation = useCallback(
+    (params: CreateEventDraftRequest): Promise<string> => {
+      if (draftEventIdRef.current) {
+        return Promise.resolve(draftEventIdRef.current);
+      }
+      if (draftCreatePromiseRef.current) {
+        return draftCreatePromiseRef.current;
+      }
+
+      beginDraftWork();
+      setStatus("正在创建活动草稿...");
+      const createPromise = createEventDraft(params)
+        .then((draft) => {
+          draftEventIdRef.current = draft.event_id;
+          if (mountedRef.current) {
+            setDraftEventId(draft.event_id);
+            setError("");
+            setStatus("草稿已创建");
+          }
+          return draft.event_id;
+        })
+        .finally(() => {
+          draftCreatePromiseRef.current = null;
+          endDraftWork();
+        });
+      draftCreatePromiseRef.current = createPromise;
+      return createPromise;
+    },
+    [beginDraftWork, endDraftWork],
+  );
+
+  const ensureRemoteDraft = useCallback(async (): Promise<string> => {
+    if (draftEventIdRef.current) {
+      return draftEventIdRef.current;
+    }
+
+    return startRemoteDraftCreation({
+      title: emptyToNull(title),
+      content: lastContentDocRef.current,
+      start_at: dateToRfc3339(startAt),
+      end_at: dateToRfc3339(endAt),
+      location_name: emptyToNull(locationName),
+      location_address: emptyToNull(locationAddress),
+      capacity: parseCapacity(capacityText),
+      tags: parseTags(tagText),
+    });
+  }, [
+    capacityText,
+    endAt,
+    locationAddress,
+    locationName,
+    startAt,
+    startRemoteDraftCreation,
+    tagText,
+    title,
+  ]);
+
+  const saveDraft = useCallback(
+    async (doc: EventContentDoc): Promise<string> => {
+      beginDraftWork();
+      const normalizedDoc = normalizeContentDoc(doc);
+      lastContentDocRef.current = normalizedDoc;
+      try {
+        const eventId = await ensureRemoteDraft();
+        const req = buildDraftUpdateRequest({
+          title,
+          doc: normalizedDoc,
+          startAt,
+          endAt,
+          locationName,
+          locationAddress,
+          capacityText,
+          tagText,
+        });
+        const saved = await updateEventDraft(eventId, req);
+        setDraftEventId(saved.event_id);
+        draftEventIdRef.current = saved.event_id;
+        setError("");
+        setStatus("草稿已保存");
+        return saved.event_id;
+      } finally {
+        endDraftWork();
+      }
+    },
+    [
+      beginDraftWork,
+      capacityText,
+      endAt,
+      endDraftWork,
+      ensureRemoteDraft,
+      locationAddress,
+      locationName,
+      startAt,
+      tagText,
+      title,
+    ],
+  );
+
+  const publishDoc = useCallback(
+    async (doc: EventContentDoc, textLength: number, imageCount: number) => {
+      try {
+        const normalizedDoc = normalizeContentDoc(doc);
+        const req = buildDraftUpdateRequest({
+          title,
+          doc: normalizedDoc,
+          startAt,
+          endAt,
+          locationName,
+          locationAddress,
+          capacityText,
+          tagText,
+        });
+        validatePublishRequest(req);
+
+        setStatus("正在保存草稿...");
+        const eventId = await saveDraft(normalizedDoc);
+
+        setStatus("正在发布活动...");
+        console.info("[create-event] publishing event draft", {
+          eventId,
+          titleLength: req.title.length,
+          textLength,
+          imageCount,
+          blockCount: req.content.blocks.length,
+        });
+        const published = await publishEventDraft(eventId);
+        setStatus("发布成功");
+        router.replace(`/event/${encodeURIComponent(published.event_id)}` as never);
+      } catch (e) {
+        console.warn("[create-event] event publish failed", e);
+        const message = e instanceof Error ? e.message : "发布失败";
+        setActiveTab(tabForValidationError(message));
+        setError(message);
+      } finally {
+        setSubmitting(false);
+      }
+    },
+    [
+      capacityText,
+      endAt,
+      locationAddress,
+      locationName,
+      saveDraft,
+      startAt,
+      tagText,
+      title,
+    ],
+  );
+
+  const requestEditorExport = useCallback(
+    (purpose: ExportPurpose) => {
+      if (!editorReady) {
+        return;
+      }
+      if (
+        purpose === "autosave" &&
+        (uploadingImage || submitting || draftWorkCountRef.current > 0)
+      ) {
+        return;
+      }
+      if (purpose === "autosave" && pendingRequestIdRef.current) {
+        return;
+      }
+
+      if (exportTimeoutRef.current) {
+        clearTimeout(exportTimeoutRef.current);
+        exportTimeoutRef.current = null;
+      }
+
+      const requestId = `${purpose}_${Date.now()}`;
+      pendingRequestIdRef.current = requestId;
+      pendingExportPurposeRef.current = purpose;
+      webViewRef.current?.injectJavaScript(
+        `window.loopEditor?.exportContent(${JSON.stringify(requestId)}); true;`,
+      );
+
+      exportTimeoutRef.current = setTimeout(() => {
+        if (pendingRequestIdRef.current !== requestId) {
+          return;
+        }
+        const timedOutPurpose = pendingExportPurposeRef.current;
+        pendingRequestIdRef.current = null;
+        pendingExportPurposeRef.current = null;
+        if (timedOutPurpose === "publish") {
+          setSubmitting(false);
+          setError("编辑器响应超时，请重试");
+          return;
+        }
+        setSavingDraft(false);
+        console.warn("[create-event] autosave export timed out");
+      }, 8000);
+    },
+    [editorReady, submitting, uploadingImage],
+  );
+
+  const scheduleAutosave = useCallback(() => {
+    if (!editorReady || submitting || uploadingImage) {
+      return;
+    }
+    if (autosaveTimeoutRef.current) {
+      clearTimeout(autosaveTimeoutRef.current);
+    }
+    autosaveTimeoutRef.current = setTimeout(() => {
+      requestEditorExport("autosave");
+    }, AUTOSAVE_DEBOUNCE_MS);
+  }, [editorReady, requestEditorExport, submitting, uploadingImage]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function createInitialDraft() {
+      try {
+        await startRemoteDraftCreation({
+          title: null,
+          content: createEmptyContentDoc(),
+          start_at: null,
+          end_at: null,
+          location_name: null,
+          location_address: null,
+          capacity: null,
+          tags: null,
+        });
+      } catch (e) {
+        if (cancelled) {
+          return;
+        }
+        console.warn("[create-event] initial draft create failed", e);
+        setError(e instanceof Error ? e.message : "草稿创建失败");
+      }
+    }
+
+    void createInitialDraft();
+    return () => {
+      cancelled = true;
+    };
+  }, [startRemoteDraftCreation]);
+
+  useEffect(() => {
+    scheduleAutosave();
+  }, [
+    capacityText,
+    endAt,
+    locationAddress,
+    locationName,
+    scheduleAutosave,
+    startAt,
+    tagText,
+    title,
+  ]);
+
+  useEffect(() => {
+    if (!editorReady) {
+      return;
+    }
+    autosaveIntervalRef.current = setInterval(() => {
+      requestEditorExport("autosave");
+    }, AUTOSAVE_INTERVAL_MS);
+    return () => {
+      if (autosaveIntervalRef.current) {
+        clearInterval(autosaveIntervalRef.current);
+        autosaveIntervalRef.current = null;
+      }
+    };
+  }, [editorReady, requestEditorExport]);
+
   const injectUploadedImage = useCallback((payload: UploadedImagePayload) => {
     webViewRef.current?.injectJavaScript(
       `window.loopEditor?.insertUploadedImage(${JSON.stringify(payload)}); true;`,
@@ -259,7 +572,7 @@ export default function CreateEventScreen() {
   }, []);
 
   const handlePickImages = useCallback(async () => {
-    if (busy) {
+    if (busy || draftWorkCountRef.current > 0) {
       return;
     }
 
@@ -308,62 +621,19 @@ export default function CreateEventScreen() {
           publicUrl: uploaded.public_url ?? undefined,
           width: uploaded.width ?? asset.width,
           height: uploaded.height ?? asset.height,
-          alt: asset.fileName ?? "任务图片",
+          alt: asset.fileName ?? "活动图片",
         });
       }
 
       setStatus(`${result.assets.length} 张图片已插入正文`);
+      scheduleAutosave();
     } catch (e) {
       console.warn("[create-event] image pick/upload failed", e);
       setError(e instanceof Error ? e.message : "图片上传失败");
     } finally {
       setUploadingImage(false);
     }
-  }, [busy, injectUploadedImage]);
-
-  const submitDoc = useCallback(
-    async (doc: EventContentDoc, textLength: number, imageCount: number) => {
-      try {
-        const req = buildCreateEventRequest({
-          title,
-          doc,
-          startAt,
-          endAt,
-          locationName,
-          locationAddress,
-          capacityText,
-          tagText,
-        });
-
-        setStatus("正在发布任务...");
-        console.info("[create-event] submitting event", {
-          titleLength: req.title.length,
-          textLength,
-          imageCount,
-          blockCount: req.content.blocks.length,
-        });
-        await createEvent(req);
-        setStatus("发布成功");
-        router.replace("/(tabs)" as never);
-      } catch (e) {
-        console.warn("[create-event] event submit failed", e);
-        const message = e instanceof Error ? e.message : "发布失败";
-        setActiveTab(tabForValidationError(message));
-        setError(message);
-      } finally {
-        setSubmitting(false);
-      }
-    },
-    [
-      capacityText,
-      endAt,
-      locationAddress,
-      locationName,
-      startAt,
-      tagText,
-      title,
-    ],
-  );
+  }, [busy, injectUploadedImage, scheduleAutosave]);
 
   const handleEditorMessage = useCallback(
     (event: WebViewMessageEvent) => {
@@ -401,15 +671,26 @@ export default function CreateEventScreen() {
         exportTimeoutRef.current = null;
       }
       pendingRequestIdRef.current = null;
-      void submitDoc(message.doc, message.textLength, message.imageCount);
+      const purpose = pendingExportPurposeRef.current;
+      pendingExportPurposeRef.current = null;
+      if (purpose === "publish") {
+        void publishDoc(message.doc, message.textLength, message.imageCount);
+        return;
+      }
+      void saveDraft(message.doc).catch((e) => {
+        console.warn("[create-event] autosave failed", e);
+        setSavingDraft(false);
+        setStatus("");
+        setError(e instanceof Error ? e.message : "草稿保存失败");
+      });
     },
-    [handlePickImages, submitDoc],
+    [handlePickImages, publishDoc, saveDraft],
   );
 
   const handleSubmit = useCallback(() => {
     if (!title.trim()) {
       setActiveTab("meta");
-      setError("请输入任务标题");
+      setError("请输入活动标题");
       return;
     }
     if (!editorReady) {
@@ -417,28 +698,15 @@ export default function CreateEventScreen() {
       setError("编辑器尚未加载完成，请稍后再试");
       return;
     }
-    if (busy) {
+    if (busy || draftWorkCountRef.current > 0) {
       return;
     }
 
     setError("");
     setStatus("正在整理正文...");
     setSubmitting(true);
-    const requestId = `submit_${Date.now()}`;
-    pendingRequestIdRef.current = requestId;
-    webViewRef.current?.injectJavaScript(
-      `window.loopEditor?.exportContent(${JSON.stringify(requestId)}); true;`,
-    );
-
-    exportTimeoutRef.current = setTimeout(() => {
-      if (pendingRequestIdRef.current !== requestId) {
-        return;
-      }
-      pendingRequestIdRef.current = null;
-      setSubmitting(false);
-      setError("编辑器响应超时，请重试");
-    }, 8000);
-  }, [busy, editorReady, title]);
+    requestEditorExport("publish");
+  }, [busy, editorReady, requestEditorExport, title]);
 
   return (
     <SafeAreaView style={styles.safeArea} edges={["top", "left", "right"]}>
@@ -456,7 +724,7 @@ export default function CreateEventScreen() {
               <IconSymbol size={22} name="chevron.left" color="#11181C" />
             </Pressable>
             <View style={styles.headerTitleWrap}>
-              <ThemedText type="subtitle">创建任务</ThemedText>
+              <ThemedText type="subtitle">创建活动</ThemedText>
               <ThemedText style={styles.headerMeta}>
                 富文本正文会按后端内容块结构发布
               </ThemedText>
@@ -503,7 +771,7 @@ export default function CreateEventScreen() {
             >
               <TextInput
                 style={[styles.input, styles.titleInput]}
-                placeholder="任务标题（最多 80 字）"
+                placeholder="活动标题（最多 80 字）"
                 placeholderTextColor="#8A94A6"
                 value={title}
                 maxLength={80}
@@ -584,13 +852,15 @@ export default function CreateEventScreen() {
             </View>
           </View>
 
-          {error || status || uploadingImage ? (
+          {statusMessage || uploadingImage ? (
             <View style={styles.statusBar}>
-              {busy ? <ActivityIndicator size="small" color="#0A7EA4" /> : null}
+              {busy || savingDraft ? (
+                <ActivityIndicator size="small" color="#0A7EA4" />
+              ) : null}
               <ThemedText
                 style={[styles.statusText, error ? styles.errorText : undefined]}
               >
-                {error || status}
+                {statusMessage}
               </ThemedText>
             </View>
           ) : null}
@@ -679,7 +949,7 @@ function DateTimeField({
   );
 }
 
-function buildCreateEventRequest({
+function buildDraftUpdateRequest({
   title,
   doc,
   startAt,
@@ -697,28 +967,43 @@ function buildCreateEventRequest({
   locationAddress: string;
   capacityText: string;
   tagText: string;
-}): CreateEventRequest {
-  const normalizedTitle = title.trim();
-  if (!normalizedTitle) {
-    throw new Error("请输入任务标题");
-  }
-  if (doc.blocks.length === 0) {
-    throw new Error("请先填写任务正文或插入图片");
-  }
-
+}): UpdateEventDraftRequest {
   if (startAt && endAt && endAt.getTime() <= startAt.getTime()) {
     throw new Error("结束时间必须晚于开始时间");
   }
 
   return {
-    title: normalizedTitle,
-    content: doc,
+    title: title.trim(),
+    content: normalizeContentDoc(doc),
     start_at: dateToRfc3339(startAt),
     end_at: dateToRfc3339(endAt),
     location_name: emptyToNull(locationName),
     location_address: emptyToNull(locationAddress),
     capacity: parseCapacity(capacityText),
     tags: parseTags(tagText),
+  };
+}
+
+function validatePublishRequest(req: UpdateEventDraftRequest) {
+  if (!req.title.trim()) {
+    throw new Error("请输入活动标题");
+  }
+  if (req.content.blocks.length === 0) {
+    throw new Error("请先填写活动正文或插入图片");
+  }
+}
+
+function createEmptyContentDoc(): EventContentDoc {
+  return {
+    version: EVENT_CONTENT_VERSION,
+    blocks: [],
+  };
+}
+
+function normalizeContentDoc(doc: EventContentDoc): EventContentDoc {
+  return {
+    version: EVENT_CONTENT_VERSION,
+    blocks: doc.blocks,
   };
 }
 

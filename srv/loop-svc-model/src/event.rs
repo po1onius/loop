@@ -24,6 +24,7 @@ table! {
         creator_id -> Int8,
         title -> Text,
         status -> Text,
+        content_version -> Int4,
         content_doc -> Jsonb,
         summary -> Text,
         cover_asset_id -> Nullable<Text>,
@@ -47,6 +48,7 @@ pub struct Event {
     pub creator_id: i64,
     pub title: String,
     pub status: String,
+    pub content_version: i32,
     pub content_doc: serde_json::Value,
     pub summary: String,
     pub cover_asset_id: Option<String>,
@@ -68,6 +70,7 @@ pub struct NewEvent {
     pub creator_id: i64,
     pub title: String,
     pub status: String,
+    pub content_version: i32,
     pub content_doc: serde_json::Value,
     pub summary: String,
     pub cover_asset_id: Option<String>,
@@ -78,6 +81,24 @@ pub struct NewEvent {
     pub capacity: Option<i32>,
     pub tags: Vec<String>,
     pub published_at: Option<DateTime<Utc>>,
+}
+
+#[derive(AsChangeset, Debug)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+#[diesel(table_name = events)]
+#[diesel(treat_none_as_null = true)]
+pub struct EventDraftChanges {
+    pub title: String,
+    pub content_version: i32,
+    pub content_doc: serde_json::Value,
+    pub summary: String,
+    pub cover_asset_id: Option<String>,
+    pub start_at: Option<DateTime<Utc>>,
+    pub end_at: Option<DateTime<Utc>>,
+    pub location_name: Option<String>,
+    pub location_address: Option<String>,
+    pub capacity: Option<i32>,
+    pub tags: Vec<String>,
 }
 
 #[derive(Queryable, Selectable, Debug)]
@@ -162,6 +183,40 @@ impl Event {
     }
 
     #[tracing::instrument(
+        name = "db.event.select_owned",
+        skip(conn),
+        fields(
+            db.system = "postgresql",
+            db.operation = "select",
+            db.table = "events",
+            user.id = owner_id,
+            event.limit = limit,
+            event.offset = offset,
+        )
+    )]
+    pub async fn select_owned(
+        owner_id: i64,
+        status: Option<&str>,
+        limit: i64,
+        offset: i64,
+        conn: &mut DieselConn,
+    ) -> Result<Vec<Self>, diesel::result::Error> {
+        let mut query = events::table
+            .filter(events::creator_id.eq(owner_id))
+            .into_boxed();
+        if let Some(status) = status {
+            query = query.filter(events::status.eq(status));
+        }
+        query
+            .order(events::updated_at.desc())
+            .limit(limit)
+            .offset(offset)
+            .select(Self::as_select())
+            .load::<Self>(conn)
+            .await
+    }
+
+    #[tracing::instrument(
         name = "db.event.select_published_by_id",
         skip(conn),
         fields(
@@ -183,6 +238,92 @@ impl Event {
             .first::<Self>(conn)
             .await
             .optional()
+    }
+
+    #[tracing::instrument(
+        name = "db.event.select_owned_by_id",
+        skip(conn),
+        fields(
+            db.system = "postgresql",
+            db.operation = "select",
+            db.table = "events",
+            event.id = event_id,
+            user.id = owner_id,
+        )
+    )]
+    pub async fn select_owned_by_id(
+        event_id: i64,
+        owner_id: i64,
+        conn: &mut DieselConn,
+    ) -> Result<Option<Self>, diesel::result::Error> {
+        events::table
+            .filter(events::event_id.eq(event_id))
+            .filter(events::creator_id.eq(owner_id))
+            .select(Self::as_select())
+            .first::<Self>(conn)
+            .await
+            .optional()
+    }
+
+    #[tracing::instrument(
+        name = "db.event.update_draft",
+        skip(changes, conn),
+        fields(
+            db.system = "postgresql",
+            db.operation = "update",
+            db.table = "events",
+            event.id = event_id,
+            user.id = owner_id,
+        )
+    )]
+    pub async fn update_draft(
+        event_id: i64,
+        owner_id: i64,
+        changes: EventDraftChanges,
+        conn: &mut DieselConn,
+    ) -> Result<Self, diesel::result::Error> {
+        diesel::update(
+            events::table
+                .filter(events::event_id.eq(event_id))
+                .filter(events::creator_id.eq(owner_id))
+                .filter(events::status.eq("draft")),
+        )
+        .set(changes)
+        .returning(Self::as_returning())
+        .get_result::<Self>(conn)
+        .await
+    }
+
+    #[tracing::instrument(
+        name = "db.event.publish_draft",
+        skip(conn),
+        fields(
+            db.system = "postgresql",
+            db.operation = "update",
+            db.table = "events",
+            event.id = event_id,
+            user.id = owner_id,
+        )
+    )]
+    pub async fn publish_draft(
+        event_id: i64,
+        owner_id: i64,
+        published_at: DateTime<Utc>,
+        conn: &mut DieselConn,
+    ) -> Result<Self, diesel::result::Error> {
+        diesel::update(
+            events::table
+                .filter(events::event_id.eq(event_id))
+                .filter(events::creator_id.eq(owner_id))
+                .filter(events::status.eq("draft")),
+        )
+        .set((
+            events::status.eq("published"),
+            events::published_at.eq(Some(published_at)),
+        ))
+        .returning(Self::as_returning())
+        .get_result::<Self>(conn)
+        .await
     }
 }
 
