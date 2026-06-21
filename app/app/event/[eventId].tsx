@@ -230,12 +230,16 @@ async function loadImageSource(
 ): Promise<EventImageLoadResult> {
   try {
     const resp = await getMediaDownloadUrl(assetId);
+    const source: EventImageSource = {
+      uri: resp.download_url,
+    };
+    const headers = toImageHeaders(resp.download_headers);
+    if (headers) {
+      source.headers = headers;
+    }
     return {
       assetId,
-      source: {
-        headers: toImageHeaders(resp.download_headers),
-        uri: resp.download_url,
-      },
+      source,
     };
   } catch (error) {
     const reason = error instanceof Error ? error.message : "图片下载地址获取失败";

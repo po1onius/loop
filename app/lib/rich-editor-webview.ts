@@ -102,10 +102,10 @@ const EventImage = Node.create({
   },
 
   renderHTML({ HTMLAttributes }) {
-    const src = String(HTMLAttributes.src || "");
-    const alt = String(HTMLAttributes.alt || "活动图片");
-    const width = Number(HTMLAttributes.width) || 1;
-    const height = Number(HTMLAttributes.height) || 1;
+    const src = String(HTMLAttributes["src"] || "");
+    const alt = String(HTMLAttributes["alt"] || "活动图片");
+    const width = Number(HTMLAttributes["width"]) || 1;
+    const height = Number(HTMLAttributes["height"]) || 1;
     const ratio = Math.min(Math.max(width / height, 0.56), 2.4);
     return [
       "figure",
@@ -176,9 +176,9 @@ function updateToolbarState() {
   }
 
   buttons.forEach((button) => {
-    const action = button.dataset.action;
-    const block = button.dataset.block;
-    const command = button.dataset.command;
+    const action = button.dataset["action"];
+    const block = button.dataset["block"];
+    const command = button.dataset["command"];
     if (block === "paragraph") {
       setButtonActive(button, currentEditor.isActive("paragraph"));
       return;
@@ -209,9 +209,9 @@ function applyToolbarAction(button: HTMLButtonElement) {
     return;
   }
 
-  const block = button.dataset.block;
-  const command = button.dataset.command;
-  const action = button.dataset.action;
+  const block = button.dataset["block"];
+  const command = button.dataset["command"];
+  const action = button.dataset["action"];
 
   if (block === "paragraph") {
     currentEditor.chain().focus().setParagraph().run();
@@ -260,7 +260,9 @@ function toggleLink() {
     return;
   }
 
-  const previousUrl = currentEditor.getAttributes("link").href as string | undefined;
+  const previousUrl = currentEditor.getAttributes("link")["href"] as
+    | string
+    | undefined;
   if (previousUrl) {
     currentEditor.chain().focus().unsetLink().run();
     return;
@@ -358,7 +360,7 @@ function toEventBlock(node: ProseMirrorNode): EventContentBlock | null {
       return {
         type: "heading",
         id,
-        level: Number(node.attrs?.level) === 3 ? 3 : 2,
+        level: Number(node.attrs?.["level"]) === 3 ? 3 : 2,
         children,
       };
     }
@@ -374,10 +376,10 @@ function toEventBlock(node: ProseMirrorNode): EventContentBlock | null {
         type: "image",
         id,
         item: {
-          asset_id: String(node.attrs?.assetId || ""),
-          width: Math.max(1, Number(node.attrs?.width) || 1),
-          height: Math.max(1, Number(node.attrs?.height) || 1),
-          alt: nullableText(node.attrs?.alt),
+          asset_id: String(node.attrs?.["assetId"] || ""),
+          width: Math.max(1, Number(node.attrs?.["width"]) || 1),
+          height: Math.max(1, Number(node.attrs?.["height"]) || 1),
+          alt: nullableText(node.attrs?.["alt"]),
         },
         caption: null,
       };
@@ -395,7 +397,7 @@ function toEventBlock(node: ProseMirrorNode): EventContentBlock | null {
 }
 
 function blockId(node: ProseMirrorNode): string {
-  const value = node.attrs?.eventBlockId;
+  const value = node.attrs?.["eventBlockId"];
   return typeof value === "string" && value.trim() ? value : createBlockId();
 }
 
@@ -426,11 +428,11 @@ function appendInlineNode(result: EventInlineNode[], node: ProseMirrorNode) {
       return;
     }
     const link = node.marks?.find((mark) => mark.type === "link");
-    if (link?.attrs?.href) {
+    if (link?.attrs?.["href"]) {
       result.push({
         type: "link",
         text,
-        url: String(link.attrs.href),
+        url: String(link.attrs["href"]),
       });
       return;
     }

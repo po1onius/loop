@@ -118,8 +118,8 @@ function EventImageBlock({
   caption?: string | null;
   compact?: boolean;
   image: EventContentImage;
-  imageError?: string;
-  imageSource?: EventImageSource;
+  imageError?: string | undefined;
+  imageSource?: EventImageSource | undefined;
 }) {
   const aspectRatio = normalizeAspectRatio(image.width, image.height);
   return (

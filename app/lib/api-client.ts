@@ -1,4 +1,4 @@
-const API_BASE_URL = normalizeBaseUrl(process.env.EXPO_PUBLIC_API_BASE_URL);
+const API_BASE_URL = normalizeBaseUrl(process.env["EXPO_PUBLIC_API_BASE_URL"]);
 
 let accessToken: string | null = null;
 
@@ -107,7 +107,7 @@ export async function requestJson<TReq, TResp>(
     if (!accessToken) {
       throw new Error("请先登录");
     }
-    headers.Authorization = `Bearer ${accessToken}`;
+    headers["Authorization"] = `Bearer ${accessToken}`;
   }
 
   console.info("[api-client] request", {
@@ -119,16 +119,16 @@ export async function requestJson<TReq, TResp>(
 
   let resp: Response;
   try {
-    resp = await fetch(`${apiBaseUrl}${path}`, {
+    const init: RequestInit = {
       method,
       headers,
-      body:
-        body === undefined
-          ? undefined
-          : JSON.stringify(body, (_key, value) =>
-              typeof value === "bigint" ? value.toString() : value,
-            ),
-    });
+    };
+    if (body !== undefined) {
+      init.body = JSON.stringify(body, (_key, value) =>
+        typeof value === "bigint" ? value.toString() : value,
+      );
+    }
+    resp = await fetch(`${apiBaseUrl}${path}`, init);
   } catch (error) {
     throw new Error(networkErrorMessage(error, path, apiBaseUrl));
   }

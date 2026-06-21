@@ -608,21 +608,24 @@ export default function CreateEventScreen() {
 
         const uploaded = await uploadLocalImageAsset({
           uri: asset.uri,
-          mimeType: asset.mimeType,
-          fileName: asset.fileName,
+          mimeType: asset.mimeType ?? null,
+          fileName: asset.fileName ?? null,
           width: asset.width,
           height: asset.height,
           file: asset.file ?? null,
         });
 
-        injectUploadedImage({
+        const imagePayload: UploadedImagePayload = {
           assetId: uploaded.asset_id,
           uri: asset.uri,
-          publicUrl: uploaded.public_url ?? undefined,
           width: uploaded.width ?? asset.width,
           height: uploaded.height ?? asset.height,
           alt: asset.fileName ?? "活动图片",
-        });
+        };
+        if (uploaded.public_url) {
+          imagePayload.publicUrl = uploaded.public_url;
+        }
+        injectUploadedImage(imagePayload);
       }
 
       setStatus(`${result.assets.length} 张图片已插入正文`);
@@ -1015,32 +1018,33 @@ function parseEditorMessage(raw: string): EditorMessage | null {
     }
 
     const message = value as Record<string, unknown>;
-    if (message.type === "ready" || message.type === "pick_image") {
-      return { type: message.type };
+    const messageType = message["type"];
+    if (messageType === "ready" || messageType === "pick_image") {
+      return { type: messageType };
     }
-    if (message.type === "log" && typeof message.message === "string") {
+    if (messageType === "log" && typeof message["message"] === "string") {
       const level =
-        message.level === "warn" || message.level === "error"
-          ? message.level
+        message["level"] === "warn" || message["level"] === "error"
+          ? message["level"]
           : "info";
       return {
         type: "log",
         level,
-        message: message.message,
-        extra: message.extra,
+        message: message["message"],
+        extra: message["extra"],
       };
     }
     if (
-      message.type === "content" &&
-      typeof message.requestId === "string" &&
-      isEventContentDoc(message.doc)
+      messageType === "content" &&
+      typeof message["requestId"] === "string" &&
+      isEventContentDoc(message["doc"])
     ) {
       return {
         type: "content",
-        requestId: message.requestId,
-        doc: message.doc,
-        textLength: toNumber(message.textLength),
-        imageCount: toNumber(message.imageCount),
+        requestId: message["requestId"],
+        doc: message["doc"],
+        textLength: toNumber(message["textLength"]),
+        imageCount: toNumber(message["imageCount"]),
       };
     }
   } catch (e) {
