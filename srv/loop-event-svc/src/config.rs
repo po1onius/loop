@@ -2,10 +2,14 @@ use anyhow::{Context, bail};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fs, sync::OnceLock};
 
+const MAX_MEDIA_PRESIGN_EXPIRES_SECS: u64 = 60 * 60 * 24 * 7;
+
 #[derive(Serialize, Deserialize, Default, Debug)]
 #[serde(default)]
 pub struct Crypto {
+    #[serde(skip)]
     pub jwt_rsa_pri_key: String,
+    #[serde(skip)]
     pub jwt_rsa_pub_key: String,
 }
 
@@ -16,6 +20,29 @@ pub struct Perm {
     pub role_perm: HashMap<String, Vec<String>>,
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(default)]
+pub struct MediaConfig {
+    pub presign_expires_secs: u64,
+    pub max_upload_bytes: i64,
+    pub allowed_mime_types: Vec<String>,
+}
+
+impl Default for MediaConfig {
+    fn default() -> Self {
+        Self {
+            presign_expires_secs: 15 * 60,
+            max_upload_bytes: 10 * 1024 * 1024,
+            allowed_mime_types: vec![
+                "image/jpeg".to_string(),
+                "image/png".to_string(),
+                "image/webp".to_string(),
+                "image/gif".to_string(),
+            ],
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Default, Debug)]
 #[serde(default)]
 pub struct Config {
@@ -24,6 +51,7 @@ pub struct Config {
     pub refresh_ttl: i64,
 
     pub perm: Perm,
+    pub media: MediaConfig,
 }
 
 static CONFIG: OnceLock<Config> = OnceLock::new();
@@ -41,7 +69,6 @@ pub fn config() -> &'static Config {
 }
 
 impl Config {
-    #[tracing::instrument(name = "config.service.load", skip_all)]
     pub fn from_env() -> anyhow::Result<Self> {
         let mut cfg = load_base_config()?;
         apply_env_overrides(&mut cfg)?;
@@ -49,7 +76,6 @@ impl Config {
         Ok(cfg)
     }
 
-    #[tracing::instrument(name = "config.service.validate", skip_all)]
     fn validate(&self) -> anyhow::Result<()> {
         ensure_non_empty("crypto.jwt_rsa_pri_key", &self.crypto.jwt_rsa_pri_key)?;
         ensure_non_empty("crypto.jwt_rsa_pub_key", &self.crypto.jwt_rsa_pub_key)?;
@@ -59,18 +85,42 @@ impl Config {
         if self.refresh_ttl <= 0 {
             bail!("refresh_ttl must be positive");
         }
+        self.media.validate()?;
 
         Ok(())
     }
 }
 
-#[tracing::instrument(
-    name = "config.base.load",
-    skip_all,
-    fields(config.file = tracing::field::Empty)
-)]
+impl MediaConfig {
+    fn validate(&self) -> anyhow::Result<()> {
+        if self.presign_expires_secs == 0
+            || self.presign_expires_secs > MAX_MEDIA_PRESIGN_EXPIRES_SECS
+        {
+            bail!(
+                "media.presign_expires_secs must be between 1 and {MAX_MEDIA_PRESIGN_EXPIRES_SECS}"
+            );
+        }
+        if self.max_upload_bytes <= 0 {
+            bail!("media.max_upload_bytes must be positive");
+        }
+        if self.allowed_mime_types.is_empty() {
+            bail!("media.allowed_mime_types must not be empty");
+        }
+        for mime_type in &self.allowed_mime_types {
+            ensure_non_empty("media.allowed_mime_types[]", mime_type)?;
+        }
+        Ok(())
+    }
+
+    pub fn is_mime_type_allowed(&self, mime_type: &str) -> bool {
+        self.allowed_mime_types
+            .iter()
+            .any(|allowed| allowed.eq_ignore_ascii_case(mime_type))
+    }
+}
+
 fn load_base_config() -> anyhow::Result<Config> {
-    let Some(path) = first_non_empty_env_opt(&["LOOP_CONFIG_FILE"]) else {
+    let Some(path) = env_opt("LOOP_CONFIG_FILE") else {
         tracing::info!(
             event = "config.base.load",
             config_source = "environment",
@@ -78,7 +128,6 @@ fn load_base_config() -> anyhow::Result<Config> {
         );
         return Ok(Config::default());
     };
-    tracing::Span::current().record("config.file", tracing::field::display(&path));
     tracing::info!(
         event = "config.base.load",
         config_source = "file",
@@ -90,30 +139,23 @@ fn load_base_config() -> anyhow::Result<Config> {
     toml::from_str(&content).with_context(|| format!("failed to parse config file: {path}"))
 }
 
-#[tracing::instrument(name = "config.env.apply", skip_all)]
 fn apply_env_overrides(cfg: &mut Config) -> anyhow::Result<()> {
-    if let Some(value) = value_from_env_or_file(
-        &["LOOP_JWT_RSA_PRI_KEY", "LOOP_JWT_RSA_PRIVATE_KEY"],
-        &["LOOP_JWT_RSA_PRI_KEY_FILE", "LOOP_JWT_RSA_PRIVATE_KEY_FILE"],
-    )? {
+    if let Some(value) = env_or_file("LOOP_JWT_RSA_PRI_KEY", "LOOP_JWT_RSA_PRI_KEY_FILE")? {
         cfg.crypto.jwt_rsa_pri_key = value;
     }
-    if let Some(value) = value_from_env_or_file(
-        &["LOOP_JWT_RSA_PUB_KEY", "LOOP_JWT_RSA_PUBLIC_KEY"],
-        &["LOOP_JWT_RSA_PUB_KEY_FILE", "LOOP_JWT_RSA_PUBLIC_KEY_FILE"],
-    )? {
+    if let Some(value) = env_or_file("LOOP_JWT_RSA_PUB_KEY", "LOOP_JWT_RSA_PUB_KEY_FILE")? {
         cfg.crypto.jwt_rsa_pub_key = value;
     }
-    if let Some(value) = first_non_empty_env_opt(&["LOOP_ACCESS_TTL"]) {
+    if let Some(value) = env_opt("LOOP_ACCESS_TTL") {
         cfg.access_ttl = parse_env_i64("LOOP_ACCESS_TTL", &value)?;
     }
-    if let Some(value) = first_non_empty_env_opt(&["LOOP_REFRESH_TTL"]) {
+    if let Some(value) = env_opt("LOOP_REFRESH_TTL") {
         cfg.refresh_ttl = parse_env_i64("LOOP_REFRESH_TTL", &value)?;
     }
-    if let Some(value) = first_non_empty_env_opt(&["LOOP_PERM_VER"]) {
+    if let Some(value) = env_opt("LOOP_PERM_VER") {
         cfg.perm.perm_ver = parse_env_u32("LOOP_PERM_VER", &value)?;
     }
-    if let Some(value) = first_non_empty_env_opt(&["LOOP_ROLE_PERM_JSON"]) {
+    if let Some(value) = env_opt("LOOP_ROLE_PERM_JSON") {
         cfg.perm.role_perm =
             serde_json::from_str(&value).context("failed to parse LOOP_ROLE_PERM_JSON")?;
     }
@@ -121,29 +163,17 @@ fn apply_env_overrides(cfg: &mut Config) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn value_from_env_or_file(
-    value_keys: &[&str],
-    file_keys: &[&str],
-) -> anyhow::Result<Option<String>> {
-    let value = first_non_empty_env_opt(value_keys);
-    let file = first_non_empty_env_opt(file_keys);
+fn env_or_file(value_key: &str, file_key: &str) -> anyhow::Result<Option<String>> {
+    let value = env_opt(value_key);
+    let file = env_opt(file_key);
     match (value, file) {
-        (Some(_), Some(_)) => bail!(
-            "set either one of [{}] or one of [{}], not both",
-            value_keys.join(", "),
-            file_keys.join(", ")
-        ),
+        (Some(_), Some(_)) => bail!("set either {value_key} or {file_key}, not both"),
         (Some(value), None) => Ok(Some(value)),
         (None, Some(path)) => read_non_empty_file(&path).map(Some),
         (None, None) => Ok(None),
     }
 }
 
-#[tracing::instrument(
-    name = "config.secret_file.read",
-    skip_all,
-    fields(config.file = %path)
-)]
 fn read_non_empty_file(path: &str) -> anyhow::Result<String> {
     let value =
         fs::read_to_string(path).with_context(|| format!("failed to read secret file: {path}"))?;
@@ -172,11 +202,9 @@ fn ensure_non_empty(name: &str, value: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn first_non_empty_env_opt(keys: &[&str]) -> Option<String> {
-    keys.iter().find_map(|key| {
-        std::env::var(key)
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-    })
+fn env_opt(key: &str) -> Option<String> {
+    std::env::var(key)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }

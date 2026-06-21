@@ -3,7 +3,10 @@ use std::sync::LazyLock;
 use tera::{Context, Tera};
 
 static EMAIL_TEMPLATES: LazyLock<Result<Tera, tera::Error>> = LazyLock::new(|| {
-    let pattern = format!("{}/../static/templates/**/*", env!("CARGO_MANIFEST_DIR"));
+    let pattern = std::env::var("LOOP_EMAIL_TEMPLATE_GLOB")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| format!("{}/../static/templates/**/*", env!("CARGO_MANIFEST_DIR")));
     loop_infra::mail::load_templates(&pattern)
 });
 

@@ -1,0 +1,18 @@
+FROM docker.io/rust:1.96-bookworm AS builder
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libpq-dev pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+# 单机部署使用独立的一次性 migration 容器，避免把 diesel cli 放进业务镜像。
+RUN cargo install diesel_cli --no-default-features --features postgres --locked
+
+FROM docker.io/debian:bookworm-slim AS runtime
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates libpq5 postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /usr/local/cargo/bin/diesel /usr/local/bin/diesel
+
+WORKDIR /work

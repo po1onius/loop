@@ -4,42 +4,31 @@ use aws_sdk_s3::{
     config::{BehaviorVersion, Credentials, Region},
     presigning::PresigningConfig,
 };
-use serde::{Deserialize, Serialize};
 use std::{
     fmt::{self, Debug, Formatter},
     sync::OnceLock,
     time::Duration,
 };
 
-const MAX_S3_PRESIGN_EXPIRES_SECS: u64 = 60 * 60 * 24 * 7;
-const DEFAULT_PRESIGN_EXPIRES_SECS: u64 = 15 * 60;
-const DEFAULT_MAX_UPLOAD_BYTES: i64 = 10 * 1024 * 1024;
-
 static S3_STORAGE: OnceLock<S3Storage> = OnceLock::new();
 
 /// Runtime S3-compatible object storage configuration.
 ///
-/// Access keys and session tokens are intentionally skipped during TOML
-/// deserialization. They must be injected through env vars or secret files in
-/// `config::InfraConfig`, which keeps ConfigMaps free of credentials.
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(default)]
+/// 对象存储供应商和 bucket 参数依赖部署环境，凭证依赖 Secret。它们都只通过
+/// env vars 或 secret files 注入；上传限制、预签名 TTL 等业务策略由业务服务
+/// 自己维护。
+#[derive(Clone)]
 pub struct S3StorageConfig {
     pub bucket: String,
     pub region: String,
     pub endpoint_url: Option<String>,
+    pub presign_endpoint_url: Option<String>,
     pub public_base_url: Option<String>,
     pub key_prefix: String,
-    #[serde(skip)]
     pub access_key_id: String,
-    #[serde(skip)]
     pub secret_access_key: String,
-    #[serde(skip)]
     pub session_token: Option<String>,
     pub force_path_style: bool,
-    pub presign_expires_secs: u64,
-    pub max_upload_bytes: i64,
-    pub allowed_mime_types: Vec<String>,
 }
 
 impl Default for S3StorageConfig {
@@ -48,20 +37,13 @@ impl Default for S3StorageConfig {
             bucket: String::new(),
             region: "us-east-1".to_string(),
             endpoint_url: None,
+            presign_endpoint_url: None,
             public_base_url: None,
             key_prefix: "media".to_string(),
             access_key_id: String::new(),
             secret_access_key: String::new(),
             session_token: None,
             force_path_style: false,
-            presign_expires_secs: DEFAULT_PRESIGN_EXPIRES_SECS,
-            max_upload_bytes: DEFAULT_MAX_UPLOAD_BYTES,
-            allowed_mime_types: vec![
-                "image/jpeg".to_string(),
-                "image/png".to_string(),
-                "image/webp".to_string(),
-                "image/gif".to_string(),
-            ],
         }
     }
 }
@@ -72,6 +54,7 @@ impl Debug for S3StorageConfig {
             .field("bucket", &self.bucket)
             .field("region", &self.region)
             .field("endpoint_url", &self.endpoint_url)
+            .field("presign_endpoint_url", &self.presign_endpoint_url)
             .field("public_base_url", &self.public_base_url)
             .field("key_prefix", &self.key_prefix)
             .field("access_key_id", &mask_secret(&self.access_key_id))
@@ -81,9 +64,6 @@ impl Debug for S3StorageConfig {
                 &self.session_token.as_ref().map(|_| "<redacted>"),
             )
             .field("force_path_style", &self.force_path_style)
-            .field("presign_expires_secs", &self.presign_expires_secs)
-            .field("max_upload_bytes", &self.max_upload_bytes)
-            .field("allowed_mime_types", &self.allowed_mime_types)
             .finish()
     }
 }
@@ -97,34 +77,16 @@ impl S3StorageConfig {
         if let Some(endpoint_url) = &self.endpoint_url {
             ensure_non_empty("storage.endpoint_url", endpoint_url)?;
         }
+        if let Some(presign_endpoint_url) = &self.presign_endpoint_url {
+            ensure_non_empty("storage.presign_endpoint_url", presign_endpoint_url)?;
+        }
         if let Some(public_base_url) = &self.public_base_url {
             ensure_non_empty("storage.public_base_url", public_base_url)?;
         }
         if let Some(session_token) = &self.session_token {
             ensure_non_empty("storage.session_token", session_token)?;
         }
-        if self.presign_expires_secs == 0 || self.presign_expires_secs > MAX_S3_PRESIGN_EXPIRES_SECS
-        {
-            bail!(
-                "storage.presign_expires_secs must be between 1 and {MAX_S3_PRESIGN_EXPIRES_SECS}"
-            );
-        }
-        if self.max_upload_bytes <= 0 {
-            bail!("storage.max_upload_bytes must be positive");
-        }
-        if self.allowed_mime_types.is_empty() {
-            bail!("storage.allowed_mime_types must not be empty");
-        }
-        for mime_type in &self.allowed_mime_types {
-            ensure_non_empty("storage.allowed_mime_types[]", mime_type)?;
-        }
         Ok(())
-    }
-
-    pub fn is_mime_type_allowed(&self, mime_type: &str) -> bool {
-        self.allowed_mime_types
-            .iter()
-            .any(|allowed| allowed.eq_ignore_ascii_case(mime_type))
     }
 
     pub fn normalized_key_prefix(&self) -> String {
@@ -143,6 +105,7 @@ impl S3StorageConfig {
 #[derive(Clone)]
 pub struct S3Storage {
     client: Client,
+    presign_client: Client,
     config: S3StorageConfig,
 }
 
@@ -177,10 +140,11 @@ impl S3Storage {
             None,
             "loop-config",
         );
-        let mut s3_config = aws_sdk_s3::config::Builder::new()
+        let base_config = aws_sdk_s3::config::Builder::new()
             .behavior_version(BehaviorVersion::latest())
             .region(Region::new(config.region.clone()))
             .credentials_provider(credentials);
+        let mut s3_config = base_config.clone();
         if let Some(endpoint_url) = config
             .endpoint_url
             .as_ref()
@@ -189,8 +153,20 @@ impl S3Storage {
         {
             s3_config = s3_config.endpoint_url(endpoint_url.to_string());
         }
+
+        let mut presign_config = base_config;
+        let presign_endpoint_url = config
+            .presign_endpoint_url
+            .as_ref()
+            .or(config.endpoint_url.as_ref())
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty());
+        if let Some(endpoint_url) = presign_endpoint_url {
+            presign_config = presign_config.endpoint_url(endpoint_url.to_string());
+        }
         if config.force_path_style {
             s3_config = s3_config.force_path_style(true);
+            presign_config = presign_config.force_path_style(true);
         }
 
         tracing::info!(
@@ -198,6 +174,7 @@ impl S3Storage {
             storage_bucket = %config.bucket,
             storage_region = %config.region,
             endpoint_configured = config.endpoint_url.is_some(),
+            presign_endpoint_configured = config.presign_endpoint_url.is_some(),
             public_base_url_configured = config.public_base_url.is_some(),
             force_path_style = config.force_path_style,
             "S3 storage client initialized"
@@ -205,6 +182,7 @@ impl S3Storage {
 
         Ok(Self {
             client: Client::from_conf(s3_config.build()),
+            presign_client: Client::from_conf(presign_config.build()),
             config,
         })
     }
@@ -222,12 +200,12 @@ impl S3Storage {
         &self,
         key: &str,
         mime_type: &str,
+        expires_in: u64,
     ) -> anyhow::Result<PresignedStorageRequest> {
-        let presign_config =
-            PresigningConfig::expires_in(Duration::from_secs(self.config.presign_expires_secs))
-                .context("failed to build S3 put presigning config")?;
+        let presign_config = PresigningConfig::expires_in(Duration::from_secs(expires_in))
+            .context("failed to build S3 put presigning config")?;
         let request = self
-            .client
+            .presign_client
             .put_object()
             .bucket(&self.config.bucket)
             .key(key)
@@ -241,11 +219,11 @@ impl S3Storage {
             storage_bucket = %self.config.bucket,
             storage_key = %key,
             storage_mime_type = %mime_type,
-            expires_in = self.config.presign_expires_secs,
+            expires_in = expires_in,
             "S3 PUT presigned URL generated"
         );
 
-        to_presigned_request(request, self.config.presign_expires_secs)
+        to_presigned_request(request, expires_in)
     }
 
     #[tracing::instrument(
@@ -253,12 +231,15 @@ impl S3Storage {
         skip_all,
         fields(storage.bucket = %self.config.bucket, storage.key = %key)
     )]
-    pub async fn presign_get(&self, key: &str) -> anyhow::Result<PresignedStorageRequest> {
-        let presign_config =
-            PresigningConfig::expires_in(Duration::from_secs(self.config.presign_expires_secs))
-                .context("failed to build S3 get presigning config")?;
+    pub async fn presign_get(
+        &self,
+        key: &str,
+        expires_in: u64,
+    ) -> anyhow::Result<PresignedStorageRequest> {
+        let presign_config = PresigningConfig::expires_in(Duration::from_secs(expires_in))
+            .context("failed to build S3 get presigning config")?;
         let request = self
-            .client
+            .presign_client
             .get_object()
             .bucket(&self.config.bucket)
             .key(key)
@@ -270,11 +251,11 @@ impl S3Storage {
             event = "storage.s3.presigned_get",
             storage_bucket = %self.config.bucket,
             storage_key = %key,
-            expires_in = self.config.presign_expires_secs,
+            expires_in = expires_in,
             "S3 GET presigned URL generated"
         );
 
-        to_presigned_request(request, self.config.presign_expires_secs)
+        to_presigned_request(request, expires_in)
     }
 
     #[tracing::instrument(
@@ -330,12 +311,16 @@ pub fn s3_storage_config() -> anyhow::Result<&'static S3StorageConfig> {
     Ok(s3_storage()?.config())
 }
 
-pub async fn presign_put(key: &str, mime_type: &str) -> anyhow::Result<PresignedStorageRequest> {
-    s3_storage()?.presign_put(key, mime_type).await
+pub async fn presign_put(
+    key: &str,
+    mime_type: &str,
+    expires_in: u64,
+) -> anyhow::Result<PresignedStorageRequest> {
+    s3_storage()?.presign_put(key, mime_type, expires_in).await
 }
 
-pub async fn presign_get(key: &str) -> anyhow::Result<PresignedStorageRequest> {
-    s3_storage()?.presign_get(key).await
+pub async fn presign_get(key: &str, expires_in: u64) -> anyhow::Result<PresignedStorageRequest> {
+    s3_storage()?.presign_get(key, expires_in).await
 }
 
 pub async fn head_object(key: &str) -> anyhow::Result<HeadObjectInfo> {

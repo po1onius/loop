@@ -1,0 +1,216 @@
+name: loop-standalone
+
+services:
+  event-svc:
+    container_name: loop-event-svc
+    build:
+      context: ../..
+      dockerfile: srv/loop-event-svc/Dockerfile
+    image: loop-event-svc:standalone
+    # 单机环境直接 bind mount 本地 secret 文件，私钥通常是 0600。
+    # rootless Podman 下容器 root 会映射到宿主机当前用户，能读取这些本地文件。
+    user: "0"
+    environment:
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://otel-collector:4317
+      DATABASE_URL: "postgresql://${PGUSER:?missing PGUSER}:${PGPASSWORD:?missing PGPASSWORD}@db:5432/${PGDATABASE:?missing PGDATABASE}"
+      REDIS_URL: "redis://:${LOOP_REDIS_PASSWORD:?missing LOOP_REDIS_PASSWORD}@cache:6379"
+      LOOP_EMAIL_FROM: ${LOOP_EMAIL_FROM:?missing LOOP_EMAIL_FROM}
+      LOOP_SMTP_SENDER: ${LOOP_SMTP_SENDER:?missing LOOP_SMTP_SENDER}
+      LOOP_SMTP_DOMAIN: ${LOOP_SMTP_DOMAIN:?missing LOOP_SMTP_DOMAIN}
+      LOOP_SMTP_TOKEN: ${LOOP_SMTP_TOKEN:?missing LOOP_SMTP_TOKEN}
+      LOOP_S3_BUCKET: ${LOOP_S3_BUCKET:?missing LOOP_S3_BUCKET}
+      LOOP_S3_REGION: ${LOOP_S3_REGION:?missing LOOP_S3_REGION}
+      LOOP_S3_ENDPOINT_URL: http://minio:9000
+      LOOP_S3_PRESIGN_ENDPOINT_URL: ${LOOP_S3_ENDPOINT_URL:?missing LOOP_S3_ENDPOINT_URL}
+      LOOP_S3_PUBLIC_BASE_URL: ${LOOP_S3_PUBLIC_BASE_URL:?missing LOOP_S3_PUBLIC_BASE_URL}
+      LOOP_S3_KEY_PREFIX: ${LOOP_S3_KEY_PREFIX:-media}
+      LOOP_S3_FORCE_PATH_STYLE: ${LOOP_S3_FORCE_PATH_STYLE:-true}
+      LOOP_S3_ACCESS_KEY_ID: ${LOOP_S3_ACCESS_KEY_ID:?missing LOOP_S3_ACCESS_KEY_ID}
+      LOOP_S3_SECRET_ACCESS_KEY: ${LOOP_S3_SECRET_ACCESS_KEY:?missing LOOP_S3_SECRET_ACCESS_KEY}
+    volumes:
+      - "${LOOP_HOST_CONFIG_FILE:?missing LOOP_HOST_CONFIG_FILE}:/etc/loop/config/loop-event-svc.toml:ro"
+      - "${LOOP_HOST_SECRETS_DIR:?missing LOOP_HOST_SECRETS_DIR}/jwt_private.pem:/etc/loop/secrets/jwt_private.pem:ro"
+      - "${LOOP_HOST_SECRETS_DIR:?missing LOOP_HOST_SECRETS_DIR}/jwt_public.pem:/etc/loop/secrets/jwt_public.pem:ro"
+      - "${LOOP_HOST_LOG_DIR:-../../srv/log}:/app/log"
+    ports:
+      - "${LOOP_EVENT_SVC_PORT:-3000}:3000"
+    depends_on:
+      - db
+      - cache
+      - minio
+      - minio-init
+      - otel-collector
+
+  db:
+    container_name: pgsql
+    image: docker.io/postgres:18.4
+    shm_size: 128mb
+    environment:
+      POSTGRES_PASSWORD: ${PGPASSWORD:?missing PGPASSWORD}
+      POSTGRES_DB: ${PGDATABASE:?missing PGDATABASE}
+      POSTGRES_USER: ${PGUSER:?missing PGUSER}
+    volumes:
+      - loop-pgdata:/var/lib/postgresql
+    ports:
+      - "${LOOP_PG_PORT:-5132}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  migrate:
+    build:
+      context: ../..
+      dockerfile: deploy/standalone/Dockerfile.migrate
+    image: loop-diesel-cli:standalone
+    restart: "no"
+    depends_on:
+      - db
+    environment:
+      DATABASE_URL: "postgresql://${PGUSER:?missing PGUSER}:${PGPASSWORD:?missing PGPASSWORD}@db:5432/${PGDATABASE:?missing PGDATABASE}"
+    volumes:
+      - ../../srv/migrations:/migrations:ro
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        echo "等待 PostgreSQL 就绪..."
+        until pg_isready -d "$${DATABASE_URL}" >/dev/null 2>&1; do
+          sleep 1
+        done
+        echo "开始执行 Diesel migration..."
+        diesel migration run --migration-dir /migrations
+        echo "Diesel migration 执行完成"
+
+  cache:
+    container_name: redis
+    image: docker.io/redis:8.2.7
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --requirepass
+      - ${LOOP_REDIS_PASSWORD:?missing LOOP_REDIS_PASSWORD}
+    volumes:
+      - loop-redis-data:/data
+    ports:
+      - "${LOOP_REDIS_PORT:-6319}:6379"
+
+  minio:
+    container_name: loop-minio
+    # MinIO 社区版镜像仓库已停止继续发布新的预编译版本；单机开发先固定到最后
+    # 可用的 legacy release。生产或 K8s 集群部署时应重新评估对象存储方案。
+    image: quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z
+    command:
+      - server
+      - /data
+      - --console-address
+      - ":9001"
+    environment:
+      # 仅用于单机开发的对象存储管理员账号，真实环境必须改用 Secret 管理。
+      MINIO_ROOT_USER: ${LOOP_S3_ACCESS_KEY_ID:?missing LOOP_S3_ACCESS_KEY_ID}
+      MINIO_ROOT_PASSWORD: ${LOOP_S3_SECRET_ACCESS_KEY:?missing LOOP_S3_SECRET_ACCESS_KEY}
+    volumes:
+      - loop-minio-data:/data
+    ports:
+      - "${LOOP_MINIO_API_PORT:-9000}:9000"
+      - "${LOOP_MINIO_CONSOLE_PORT:-9001}:9001"
+
+  minio-init:
+    container_name: loop-minio-init
+    image: quay.io/minio/mc:RELEASE.2025-04-16T18-13-26Z
+    depends_on:
+      - minio
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        until mc alias set local http://minio:9000 "$${LOOP_S3_ACCESS_KEY_ID}" "$${LOOP_S3_SECRET_ACCESS_KEY}"; do
+          sleep 1
+        done
+        mc mb --ignore-existing "local/$${LOOP_S3_BUCKET}"
+        mc anonymous set download "local/$${LOOP_S3_BUCKET}"
+    environment:
+      LOOP_S3_BUCKET: ${LOOP_S3_BUCKET:?missing LOOP_S3_BUCKET}
+      LOOP_S3_ACCESS_KEY_ID: ${LOOP_S3_ACCESS_KEY_ID:?missing LOOP_S3_ACCESS_KEY_ID}
+      LOOP_S3_SECRET_ACCESS_KEY: ${LOOP_S3_SECRET_ACCESS_KEY:?missing LOOP_S3_SECRET_ACCESS_KEY}
+
+  otel-collector:
+    image: docker.io/otel/opentelemetry-collector-contrib:0.154.0
+    container_name: loop-otel-collector
+    command:
+      - --config=/etc/otelcol/config.yaml
+    volumes:
+      - ./configs/otel-collector.yaml:/etc/otelcol/config.yaml:ro
+    ports:
+      - "${LOOP_OTEL_GRPC_PORT:-4317}:4317"
+    depends_on:
+      - tempo
+
+  tempo:
+    image: docker.io/grafana/tempo:2.10.7
+    container_name: loop-tempo
+    # rootless Podman 未配置 /etc/subuid 时，命名卷可能映射到宿主机用户。
+    # 单机开发中让 Tempo 以 root 写本地卷，避免存储目录权限导致启动失败。
+    user: "0"
+    command:
+      - -config.file=/etc/tempo.yaml
+    volumes:
+      - ./configs/tempo.yaml:/etc/tempo.yaml:ro
+      - loop-tempo-data:/tmp/tempo
+
+  loki:
+    image: docker.io/grafana/loki:3.7.2
+    container_name: loop-loki
+    command:
+      - -config.file=/etc/loki/config.yaml
+    volumes:
+      - ./configs/loki.yaml:/etc/loki/config.yaml:ro
+      - loop-loki-data:/loki
+
+  alloy:
+    image: docker.io/grafana/alloy:v1.17.0
+    container_name: loop-alloy
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    volumes:
+      - ./configs/alloy-config.alloy:/etc/alloy/config.alloy:ro
+      - "${LOOP_HOST_LOG_DIR:-../../srv/log}:/var/log/loop:ro"
+      - loop-alloy-data:/var/lib/alloy/data
+    depends_on:
+      - loki
+
+  prometheus:
+    image: docker.io/prom/prometheus:v3.12.0
+    container_name: loop-prometheus
+    volumes:
+      - ./configs/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+
+  grafana:
+    image: docker.io/grafana/grafana-oss:13.0.2
+    container_name: loop-grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: ${LOOP_GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${LOOP_GRAFANA_ADMIN_PASSWORD:-admin}
+    volumes:
+      - loop-grafana-data:/var/lib/grafana
+      - ./configs/grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      - "${LOOP_GRAFANA_PORT:-3001}:3000"
+    depends_on:
+      - prometheus
+      - tempo
+      - loki
+
+volumes:
+  loop-pgdata:
+  loop-redis-data:
+  loop-minio-data:
+  loop-tempo-data:
+  loop-loki-data:
+  loop-alloy-data:
+  loop-grafana-data:

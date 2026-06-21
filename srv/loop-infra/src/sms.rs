@@ -1,13 +1,11 @@
 use anyhow::{Context, anyhow};
-use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 
 static SMS_CONFIG: OnceLock<SmsConfig> = OnceLock::new();
 
 /// Placeholder for SMS provider settings. Keeping the type in infra lets
 /// business services depend on a stable SMS boundary before a provider is wired.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-#[serde(default)]
+#[derive(Clone, Debug, Default)]
 pub struct SmsConfig {}
 
 #[tracing::instrument(name = "infra.sms.init", skip_all)]

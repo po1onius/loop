@@ -1,6 +1,7 @@
 -- 初始化当前开发阶段数据库结构。
 -- 开发阶段不保留历史 schema 兼容迁移；表结构变更时直接更新本初始化脚本，
 -- 本地环境通过重建数据库获得与代码一致的干净 schema。
+-- 数据库层不使用外键，跨表引用关系由业务服务校验并通过普通索引保障查询效率。
 
 CREATE TABLE users (
     user_id BIGSERIAL PRIMARY KEY,
@@ -44,7 +45,7 @@ WHERE revoked_at IS NULL;
 
 CREATE TABLE media_assets (
     asset_id TEXT PRIMARY KEY,
-    owner_id BIGINT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    owner_id BIGINT NOT NULL,
     storage_key TEXT NOT NULL,
     mime_type TEXT NOT NULL,
     byte_size BIGINT NOT NULL,
@@ -70,12 +71,12 @@ ON media_assets(status);
 
 CREATE TABLE events (
     event_id BIGSERIAL PRIMARY KEY,
-    creator_id BIGINT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    creator_id BIGINT NOT NULL,
     title TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'published',
     content_doc JSONB NOT NULL,
     summary TEXT NOT NULL DEFAULT '',
-    cover_asset_id TEXT REFERENCES media_assets(asset_id) ON DELETE SET NULL,
+    cover_asset_id TEXT,
     start_at TIMESTAMPTZ,
     end_at TIMESTAMPTZ,
     location_name TEXT,
@@ -98,6 +99,10 @@ ON events(status, created_at DESC);
 
 CREATE INDEX idx_events_creator_id_created_at
 ON events(creator_id, created_at DESC);
+
+CREATE INDEX idx_events_cover_asset_id
+ON events(cover_asset_id)
+WHERE cover_asset_id IS NOT NULL;
 
 CREATE INDEX idx_events_start_at
 ON events(start_at)

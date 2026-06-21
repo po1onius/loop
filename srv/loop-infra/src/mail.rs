@@ -3,7 +3,6 @@ use lettre::{
     AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor, message::header::ContentType,
     transport::smtp::authentication::Credentials,
 };
-use serde::{Deserialize, Serialize};
 use std::{
     fmt::{self, Debug, Formatter},
     sync::OnceLock,
@@ -12,13 +11,13 @@ use tera::Tera;
 
 static EMAIL_CONFIG: OnceLock<EmailConfig> = OnceLock::new();
 
-/// SMTP provider settings. `token` is skipped during TOML deserialization and
-/// must come from env vars or a secret file.
-#[derive(Clone, Serialize, Deserialize, Default)]
-#[serde(default)]
+/// SMTP provider settings.
+///
+/// 这些字段都依赖部署环境，必须通过环境变量或 Secret 文件注入，避免把
+/// 不同环境的邮件供应商配置写入业务 TOML。
+#[derive(Clone, Default)]
 pub struct SmtpConfig {
     pub sender: String,
-    #[serde(skip)]
     pub token: String,
     pub domain: String,
 }
@@ -33,8 +32,7 @@ impl Debug for SmtpConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, Default, Debug)]
-#[serde(default)]
+#[derive(Clone, Default, Debug)]
 pub struct EmailConfig {
     pub from: String,
     pub smtp: SmtpConfig,

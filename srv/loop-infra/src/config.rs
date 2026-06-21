@@ -1,5 +1,16 @@
+#[cfg(any(
+    feature = "db",
+    feature = "redis",
+    feature = "mail",
+    feature = "storage"
+))]
 use anyhow::Context;
-use serde::Deserialize;
+#[cfg(any(
+    feature = "db",
+    feature = "redis",
+    feature = "mail",
+    feature = "storage"
+))]
 use std::fs;
 
 #[cfg(feature = "mail")]
@@ -10,10 +21,11 @@ use crate::sms::SmsConfig;
 use crate::storage::S3StorageConfig;
 
 /// Aggregates infrastructure settings for the components enabled by crate
-/// features. The same TOML file can contain both service and infrastructure
-/// sections because unknown fields are ignored by each side's deserializer.
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default)]
+/// features.
+///
+/// 基础设施配置只从环境变量或 `*_FILE` Secret 文件读取，不读取业务 TOML。
+/// 这样可以避免部署环境参数和业务策略配置混在同一个文件里。
+#[derive(Clone, Debug, Default)]
 pub struct InfraConfig {
     #[cfg(feature = "db")]
     pub pg_conn: String,
@@ -28,17 +40,14 @@ pub struct InfraConfig {
 }
 
 impl InfraConfig {
-    /// Load ordinary values from `LOOP_CONFIG_FILE`, then overlay deployment
-    /// secrets and environment-specific overrides from env vars or `*_FILE`.
-    #[tracing::instrument(name = "infra.config.load", skip_all)]
+    /// Load infrastructure settings from env vars or `*_FILE` secret files.
     pub fn from_env() -> anyhow::Result<Self> {
-        let mut cfg = load_base_config()?;
+        let mut cfg = InfraConfig::default();
         apply_env_overrides(&mut cfg)?;
         cfg.validate()?;
         Ok(cfg)
     }
 
-    #[tracing::instrument(name = "infra.config.validate", skip_all)]
     pub fn validate(&self) -> anyhow::Result<()> {
         #[cfg(feature = "db")]
         ensure_non_empty("infra.pg_conn", &self.pg_conn)?;
@@ -59,7 +68,6 @@ impl InfraConfig {
     /// Initialize all enabled infrastructure singletons once during service
     /// bootstrap. If a feature is enabled, its configuration is required and
     /// invalid settings fail fast before the HTTP server starts.
-    #[tracing::instrument(name = "infra.components.init", skip_all)]
     pub fn init(self) -> anyhow::Result<()> {
         #[cfg(feature = "db")]
         crate::db::init_pg_pool(&self.pg_conn)?;
@@ -78,48 +86,21 @@ impl InfraConfig {
     }
 }
 
-#[tracing::instrument(
-    name = "infra.config.base.load",
-    skip_all,
-    fields(config.file = tracing::field::Empty)
-)]
-fn load_base_config() -> anyhow::Result<InfraConfig> {
-    let Some(path) = first_non_empty_env_opt(&["LOOP_CONFIG_FILE"]) else {
-        tracing::info!(
-            event = "infra.config.base.load",
-            config_source = "environment",
-            "loading infrastructure config from environment"
-        );
-        return Ok(InfraConfig::default());
-    };
-
-    tracing::Span::current().record("config.file", tracing::field::display(&path));
-    tracing::info!(
-        event = "infra.config.base.load",
-        config_source = "file",
-        config_file = %path,
-        "loading infrastructure config file {path}"
-    );
-    let content =
-        fs::read_to_string(&path).with_context(|| format!("failed to read config file: {path}"))?;
-    toml::from_str(&content).with_context(|| format!("failed to parse config file: {path}"))
-}
-
-#[tracing::instrument(name = "infra.config.env.apply", skip_all)]
 fn apply_env_overrides(cfg: &mut InfraConfig) -> anyhow::Result<()> {
     let _ = cfg;
 
     #[cfg(feature = "db")]
     {
-        if let Some(value) = first_non_empty_env_opt(&["LOOP_PG_CONN", "DATABASE_URL"]) {
-            cfg.pg_conn = value;
-        }
+        cfg.pg_conn = build_pg_conn_from_env()?;
     }
     #[cfg(feature = "redis")]
     {
-        if let Some(value) = first_non_empty_env_opt(&["LOOP_REDIS_CONN", "REDIS_URL"]) {
-            cfg.redis_conn = value;
-        }
+        cfg.redis_conn = env_required("REDIS_URL")?;
+
+        tracing::info!(
+            event = "infra.config.redis.loaded",
+            "redis url loaded from deployment configuration"
+        );
     }
 
     #[cfg(feature = "mail")]
@@ -130,98 +111,103 @@ fn apply_env_overrides(cfg: &mut InfraConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "db")]
+fn build_pg_conn_from_env() -> anyhow::Result<String> {
+    // 业务服务只读取最终连接串。不同部署形态需要的 host、端口、账号拼接，
+    // 放在 Compose、Makefile 或 K8s Secret/ConfigMap 这类部署层处理。
+    let value = env_required("DATABASE_URL")?;
+
+    tracing::info!(
+        event = "infra.config.postgres.loaded",
+        "postgres database url loaded from deployment configuration"
+    );
+
+    Ok(value)
+}
+
+#[cfg(any(feature = "db", feature = "redis"))]
+fn env_required(key: &str) -> anyhow::Result<String> {
+    env_opt(key).ok_or_else(|| anyhow::anyhow!("{key} is required"))
+}
+
 #[cfg(feature = "mail")]
-#[tracing::instrument(name = "infra.config.email_env.apply", skip_all)]
 fn apply_email_env_overrides(cfg: &mut InfraConfig) -> anyhow::Result<()> {
-    if let Some(value) = first_non_empty_env_opt(&["LOOP_EMAIL_FROM"]) {
+    if let Some(value) = env_opt("LOOP_EMAIL_FROM") {
         cfg.email.from = value;
     }
-    if let Some(value) = first_non_empty_env_opt(&["LOOP_SMTP_SENDER"]) {
+    if let Some(value) = env_opt("LOOP_SMTP_SENDER") {
         cfg.email.smtp.sender = value;
     }
-    if let Some(value) = value_from_env_or_file(&["LOOP_SMTP_TOKEN"], &["LOOP_SMTP_TOKEN_FILE"])? {
+    if let Some(value) = env_or_file("LOOP_SMTP_TOKEN", "LOOP_SMTP_TOKEN_FILE")? {
         cfg.email.smtp.token = value;
     }
-    if let Some(value) = first_non_empty_env_opt(&["LOOP_SMTP_DOMAIN"]) {
+    if let Some(value) = env_opt("LOOP_SMTP_DOMAIN") {
         cfg.email.smtp.domain = value;
     }
     Ok(())
 }
 
 #[cfg(feature = "storage")]
-#[tracing::instrument(name = "infra.config.storage_env.apply", skip_all)]
 fn apply_storage_env_overrides(cfg: &mut InfraConfig) -> anyhow::Result<()> {
-    if let Some(value) = first_non_empty_env_opt(&["LOOP_S3_BUCKET"]) {
+    if let Some(value) = env_opt("LOOP_S3_BUCKET") {
         cfg.storage.bucket = value;
     }
-    if let Some(value) = first_non_empty_env_opt(&["LOOP_S3_REGION"]) {
+    if let Some(value) = env_opt("LOOP_S3_REGION") {
         cfg.storage.region = value;
     }
-    if let Some(value) = first_non_empty_env_opt(&["LOOP_S3_ENDPOINT_URL"]) {
+    if let Some(value) = env_opt("LOOP_S3_ENDPOINT_URL") {
         cfg.storage.endpoint_url = Some(value);
     }
-    if let Some(value) = first_non_empty_env_opt(&["LOOP_S3_PUBLIC_BASE_URL"]) {
+    if let Some(value) = env_opt("LOOP_S3_PRESIGN_ENDPOINT_URL") {
+        cfg.storage.presign_endpoint_url = Some(value);
+    }
+    if let Some(value) = env_opt("LOOP_S3_PUBLIC_BASE_URL") {
         cfg.storage.public_base_url = Some(value);
     }
-    if let Some(value) = first_non_empty_env_opt(&["LOOP_S3_KEY_PREFIX"]) {
+    if let Some(value) = env_opt("LOOP_S3_KEY_PREFIX") {
         cfg.storage.key_prefix = value;
     }
-    if let Some(value) =
-        value_from_env_or_file(&["LOOP_S3_ACCESS_KEY_ID"], &["LOOP_S3_ACCESS_KEY_ID_FILE"])?
-    {
+    if let Some(value) = env_or_file("LOOP_S3_ACCESS_KEY_ID", "LOOP_S3_ACCESS_KEY_ID_FILE")? {
         cfg.storage.access_key_id = value;
     }
-    if let Some(value) = value_from_env_or_file(
-        &["LOOP_S3_SECRET_ACCESS_KEY"],
-        &["LOOP_S3_SECRET_ACCESS_KEY_FILE"],
+    if let Some(value) = env_or_file(
+        "LOOP_S3_SECRET_ACCESS_KEY",
+        "LOOP_S3_SECRET_ACCESS_KEY_FILE",
     )? {
         cfg.storage.secret_access_key = value;
     }
-    if let Some(value) =
-        value_from_env_or_file(&["LOOP_S3_SESSION_TOKEN"], &["LOOP_S3_SESSION_TOKEN_FILE"])?
-    {
+    if let Some(value) = env_or_file("LOOP_S3_SESSION_TOKEN", "LOOP_S3_SESSION_TOKEN_FILE")? {
         cfg.storage.session_token = Some(value);
     }
-    if let Some(value) = first_non_empty_env_opt(&["LOOP_S3_FORCE_PATH_STYLE"]) {
+    if let Some(value) = env_opt("LOOP_S3_FORCE_PATH_STYLE") {
         cfg.storage.force_path_style = parse_env_bool("LOOP_S3_FORCE_PATH_STYLE", &value)?;
-    }
-    if let Some(value) = first_non_empty_env_opt(&["LOOP_S3_PRESIGN_EXPIRES_SECS"]) {
-        cfg.storage.presign_expires_secs = parse_env_u64("LOOP_S3_PRESIGN_EXPIRES_SECS", &value)?;
-    }
-    if let Some(value) = first_non_empty_env_opt(&["LOOP_S3_MAX_UPLOAD_BYTES"]) {
-        cfg.storage.max_upload_bytes = parse_env_i64("LOOP_S3_MAX_UPLOAD_BYTES", &value)?;
-    }
-    if let Some(value) = first_non_empty_env_opt(&["LOOP_S3_ALLOWED_MIME_TYPES"]) {
-        cfg.storage.allowed_mime_types = parse_env_list(&value);
     }
     Ok(())
 }
 
-#[cfg(any(feature = "mail", feature = "storage"))]
-fn value_from_env_or_file(
-    value_keys: &[&str],
-    file_keys: &[&str],
-) -> anyhow::Result<Option<String>> {
-    let value = first_non_empty_env_opt(value_keys);
-    let file = first_non_empty_env_opt(file_keys);
+#[cfg(any(
+    feature = "db",
+    feature = "redis",
+    feature = "mail",
+    feature = "storage"
+))]
+fn env_or_file(value_key: &str, file_key: &str) -> anyhow::Result<Option<String>> {
+    let value = env_opt(value_key);
+    let file = env_opt(file_key);
     match (value, file) {
-        (Some(_), Some(_)) => anyhow::bail!(
-            "set either one of [{}] or one of [{}], not both",
-            value_keys.join(", "),
-            file_keys.join(", ")
-        ),
+        (Some(_), Some(_)) => anyhow::bail!("set either {value_key} or {file_key}, not both"),
         (Some(value), None) => Ok(Some(value)),
         (None, Some(path)) => read_non_empty_file(&path).map(Some),
         (None, None) => Ok(None),
     }
 }
 
-#[cfg(any(feature = "mail", feature = "storage"))]
-#[tracing::instrument(
-    name = "infra.config.secret_file.read",
-    skip_all,
-    fields(config.file = %path)
-)]
+#[cfg(any(
+    feature = "db",
+    feature = "redis",
+    feature = "mail",
+    feature = "storage"
+))]
 fn read_non_empty_file(path: &str) -> anyhow::Result<String> {
     let value =
         fs::read_to_string(path).with_context(|| format!("failed to read secret file: {path}"))?;
@@ -229,20 +215,6 @@ fn read_non_empty_file(path: &str) -> anyhow::Result<String> {
         anyhow::bail!("secret file is empty: {path}");
     }
     Ok(value.trim().to_string())
-}
-
-#[cfg(feature = "storage")]
-fn parse_env_i64(key: &str, value: &str) -> anyhow::Result<i64> {
-    value
-        .parse()
-        .with_context(|| format!("failed to parse {key} as i64"))
-}
-
-#[cfg(feature = "storage")]
-fn parse_env_u64(key: &str, value: &str) -> anyhow::Result<u64> {
-    value
-        .parse()
-        .with_context(|| format!("failed to parse {key} as u64"))
 }
 
 #[cfg(feature = "storage")]
@@ -254,15 +226,6 @@ fn parse_env_bool(key: &str, value: &str) -> anyhow::Result<bool> {
     }
 }
 
-#[cfg(feature = "storage")]
-fn parse_env_list(value: &str) -> Vec<String> {
-    value
-        .split(',')
-        .map(|item| item.trim().to_string())
-        .filter(|item| !item.is_empty())
-        .collect()
-}
-
 #[cfg(any(feature = "db", feature = "redis"))]
 fn ensure_non_empty(name: &str, value: &str) -> anyhow::Result<()> {
     if value.trim().is_empty() {
@@ -271,11 +234,15 @@ fn ensure_non_empty(name: &str, value: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn first_non_empty_env_opt(keys: &[&str]) -> Option<String> {
-    keys.iter().find_map(|key| {
-        std::env::var(key)
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-    })
+#[cfg(any(
+    feature = "db",
+    feature = "redis",
+    feature = "mail",
+    feature = "storage"
+))]
+fn env_opt(key: &str) -> Option<String> {
+    std::env::var(key)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }

@@ -1,4 +1,5 @@
 use crate::{
+    config::{MediaConfig, config},
     db_conn,
     http::{AppRoutes, AppState, AuthInfo, HttpErr, ResultExt, err_key::*},
 };
@@ -32,14 +33,16 @@ pub async fn create_upload_url(
     Json(req): Json<CreateMediaUploadRequest>,
 ) -> Result<(StatusCode, Json<CreateMediaUploadResp>), HttpErr> {
     let storage_config = storage_config_or_error()?;
+    let media_config = &config().media;
     let mime_type = normalize_mime_type(&req.mime_type)?;
-    validate_upload_request(&req, storage_config, &mime_type)?;
+    validate_upload_request(&req, media_config, &mime_type)?;
 
     let asset_id = Uuid::now_v7().to_string();
     let storage_key = build_storage_key(auth.user_id, &asset_id, &mime_type, storage_config);
-    let presigned = storage::presign_put(&storage_key, &mime_type)
-        .await
-        .internal(STORAGE_ERROR)?;
+    let presigned =
+        storage::presign_put(&storage_key, &mime_type, media_config.presign_expires_secs)
+            .await
+            .internal(STORAGE_ERROR)?;
     let public_url = storage::public_url(&storage_key).internal(STORAGE_ERROR)?;
 
     let new_asset = NewMediaAsset {
@@ -150,11 +153,12 @@ pub async fn download_url(
     Path(asset_id): Path<String>,
 ) -> Result<Json<MediaDownloadUrlResp>, HttpErr> {
     storage_config_or_error()?;
+    let media_config = &config().media;
     let asset = MediaAsset::select_uploaded_by_asset_id(&asset_id, &mut db_conn!())
         .await
         .internal(DB_ERROR)?
         .ok_or_else(|| HttpErr::client(StatusCode::NOT_FOUND, MEDIA_NOT_FOUND))?;
-    let presigned = storage::presign_get(&asset.storage_key)
+    let presigned = storage::presign_get(&asset.storage_key, media_config.presign_expires_secs)
         .await
         .internal(STORAGE_ERROR)?;
 
@@ -181,7 +185,7 @@ fn storage_config_or_error() -> Result<&'static S3StorageConfig, HttpErr> {
 
 fn validate_upload_request(
     req: &CreateMediaUploadRequest,
-    config: &S3StorageConfig,
+    config: &MediaConfig,
     mime_type: &str,
 ) -> Result<(), HttpErr> {
     if req.byte_size <= 0 || i64::from(req.byte_size) > config.max_upload_bytes {
