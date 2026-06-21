@@ -5,16 +5,19 @@ use crate::{
 use axum::{
     Json,
     extract::{Path, Query, State},
-    routing::{get, patch, post},
+    routing::{delete, get, patch, post},
 };
 use chrono::{DateTime, Utc};
+use diesel_async::AsyncConnection;
 use http::{Method, StatusCode};
 use loop_dto::{
     CreateEventDraftRequest, CreateEventRequest, EVENT_CONTENT_VERSION_V1, EventContentBlock,
     EventContentDoc, EventContentImage, EventFeatureBlock, EventInlineNode, EventResp, EventStatus,
     EventTextMark, ListEventsResp, UpdateEventDraftRequest,
 };
-use loop_svc_model::event::{Event, EventDraftChanges, MediaAsset, NewEvent};
+use loop_svc_model::event::{
+    Event, EventDraftChanges, MediaAsset, NewEvent, PublishEventDraftChanges,
+};
 use serde::Deserialize;
 use std::collections::HashSet;
 
@@ -154,59 +157,21 @@ pub async fn publish_event_draft(
     Path(event_id): Path<String>,
 ) -> Result<Json<EventResp>, HttpErr> {
     let event_id = parse_event_id(&event_id)?;
-    let event = Event::select_owned_by_id(event_id, auth.user_id, &mut db_conn!())
-        .await
-        .internal(DB_ERROR)?
-        .ok_or_else(|| HttpErr::client(StatusCode::NOT_FOUND, EVENT_NOT_FOUND))?;
-    if event.status != "draft" {
-        tracing::warn!(
-            event = "event.publish.invalid_status",
-            event_id = event.event_id,
-            user_id = auth.user_id,
-            event_status = %event.status,
-            "only draft events can be published"
-        );
-        return Err(HttpErr::client(StatusCode::BAD_REQUEST, INVALID_INPUT));
-    }
-
-    let content = parse_stored_content(&event)?;
-    let title = normalize_required_text(&event.title, MAX_TITLE_CHARS)?;
-    let content_stats = validate_content_for_publish(&content)?;
-    let asset_ids = collect_image_asset_ids(&content);
-    validate_referenced_media_assets(auth.user_id, &asset_ids).await?;
-    let start_at = event.start_at;
-    let end_at = event.end_at;
-    validate_time_range(start_at, end_at)?;
-
-    let refreshed = Event::update_draft(
-        event_id,
-        auth.user_id,
-        EventDraftChanges {
-            title,
-            content_version: EVENT_CONTENT_VERSION_V1,
-            content_doc: serde_json::to_value(&content).internal(DB_ERROR)?,
-            summary: build_summary(&content_stats.plain_text),
-            cover_asset_id: cover_asset_id(&content),
-            start_at,
-            end_at,
-            location_name: event.location_name,
-            location_address: event.location_address,
-            capacity: validate_capacity(event.capacity)?,
-            tags: normalize_tags(event.tags)?,
-        },
-        &mut db_conn!(),
-    )
-    .await
-    .map_err(map_event_mutation_error)?;
-
-    let event = Event::publish_draft(
-        refreshed.event_id,
-        auth.user_id,
-        Utc::now(),
-        &mut db_conn!(),
-    )
-    .await
-    .map_err(map_event_mutation_error)?;
+    let mut conn = db_conn!();
+    let event = conn
+        .transaction::<Event, HttpErr, _>(async |conn| {
+            let event = Event::select_owned_draft_for_update(event_id, auth.user_id, conn)
+                .await
+                .internal(DB_ERROR)?
+                .ok_or_else(|| HttpErr::client(StatusCode::NOT_FOUND, EVENT_NOT_FOUND))?;
+            let asset_ids = collect_image_asset_ids(&parse_stored_content(&event)?);
+            validate_referenced_media_assets_with_conn(auth.user_id, &asset_ids, conn).await?;
+            let publish_changes = build_publish_changes(event)?;
+            Event::publish_draft_with_changes(event_id, auth.user_id, publish_changes, conn)
+                .await
+                .map_err(map_event_mutation_error)
+        })
+        .await?;
     tracing::info!(
         event = "event.draft_published",
         event_id = event.event_id,
@@ -215,6 +180,32 @@ pub async fn publish_event_draft(
     );
 
     Ok(Json(to_event_resp(event)?))
+}
+
+#[tracing::instrument(
+    name = "event.draft.delete",
+    skip_all,
+    fields(user.id = auth.user_id, event.id = %event_id)
+)]
+pub async fn delete_event_draft(
+    State(_state): State<crate::http::AppState>,
+    auth: AuthInfo,
+    Path(event_id): Path<String>,
+) -> Result<StatusCode, HttpErr> {
+    let event_id = parse_event_id(&event_id)?;
+    let affected = Event::delete_draft(event_id, auth.user_id, &mut db_conn!())
+        .await
+        .internal(DB_ERROR)?;
+    if affected == 0 {
+        return Err(HttpErr::client(StatusCode::NOT_FOUND, EVENT_NOT_FOUND));
+    }
+    tracing::info!(
+        event = "event.draft_deleted",
+        event_id = event_id,
+        user_id = auth.user_id,
+        "event draft deleted"
+    );
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[tracing::instrument(name = "event.list", skip_all)]
@@ -458,6 +449,31 @@ fn to_draft_changes(draft: NormalizedEventDraft) -> Result<EventDraftChanges, Ht
         location_address: draft.location_address,
         capacity: draft.capacity,
         tags: draft.tags,
+    })
+}
+
+fn build_publish_changes(event: Event) -> Result<PublishEventDraftChanges, HttpErr> {
+    let content = parse_stored_content(&event)?;
+    let title = normalize_required_text(&event.title, MAX_TITLE_CHARS)?;
+    let content_stats = validate_content_for_publish(&content)?;
+    let start_at = event.start_at;
+    let end_at = event.end_at;
+    validate_time_range(start_at, end_at)?;
+
+    Ok(PublishEventDraftChanges {
+        title,
+        content_version: EVENT_CONTENT_VERSION_V1,
+        content_doc: serde_json::to_value(&content).internal(DB_ERROR)?,
+        summary: build_summary(&content_stats.plain_text),
+        cover_asset_id: cover_asset_id(&content),
+        start_at,
+        end_at,
+        location_name: event.location_name,
+        location_address: event.location_address,
+        capacity: validate_capacity(event.capacity)?,
+        tags: normalize_tags(event.tags)?,
+        status: "published".to_string(),
+        published_at: Some(Utc::now()),
     })
 }
 
@@ -731,12 +747,20 @@ async fn validate_referenced_media_assets(
     owner_id: i64,
     asset_ids: &HashSet<String>,
 ) -> Result<(), HttpErr> {
+    validate_referenced_media_assets_with_conn(owner_id, asset_ids, &mut db_conn!()).await
+}
+
+async fn validate_referenced_media_assets_with_conn(
+    owner_id: i64,
+    asset_ids: &HashSet<String>,
+    conn: &mut loop_svc_model::DieselConn,
+) -> Result<(), HttpErr> {
     if asset_ids.is_empty() {
         return Ok(());
     }
 
     let ids = asset_ids.iter().cloned().collect::<Vec<_>>();
-    let rows = MediaAsset::select_uploaded_by_ids_for_owner(&ids, owner_id, &mut db_conn!())
+    let rows = MediaAsset::select_uploaded_by_ids_for_owner(&ids, owner_id, conn)
         .await
         .internal(DB_ERROR)?;
     if rows.len() != ids.len() {
@@ -931,6 +955,12 @@ pub fn route(state: crate::http::AppState) -> AppRoutes {
             patch(update_event_draft),
         )
         .protected(
+            Method::DELETE,
+            "/event/{event_id}",
+            EVENT_CREATE_PERMISSION,
+            delete(delete_event_draft),
+        )
+        .protected(
             Method::POST,
             "/event/{event_id}/publish",
             EVENT_CREATE_PERMISSION,
@@ -953,6 +983,32 @@ mod tests {
                     marks: Vec::new(),
                 }],
             }],
+        }
+    }
+
+    fn draft_event(content: EventContentDoc) -> Event {
+        Event {
+            event_id: 1,
+            creator_id: 7,
+            title: "  活动标题  ".to_string(),
+            status: "draft".to_string(),
+            content_version: EVENT_CONTENT_VERSION_V1,
+            content_doc: serde_json::to_value(content).expect("content should serialize"),
+            summary: String::new(),
+            cover_asset_id: None,
+            start_at: None,
+            end_at: None,
+            location_name: Some("  场地  ".to_string()),
+            location_address: None,
+            capacity: Some(20),
+            tags: vec![
+                " rust ".to_string(),
+                "#rust".to_string(),
+                "后端".to_string(),
+            ],
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            published_at: None,
         }
     }
 
@@ -981,5 +1037,24 @@ mod tests {
     #[test]
     fn parse_optional_status_rejects_unknown_status() {
         parse_optional_status(Some("archived")).expect_err("unknown status should be rejected");
+    }
+
+    #[test]
+    fn build_publish_changes_normalizes_publish_snapshot() {
+        let changes =
+            build_publish_changes(draft_event(text_doc("活动介绍"))).expect("draft should publish");
+
+        assert_eq!(changes.title, "活动标题");
+        assert_eq!(changes.summary, "活动介绍");
+        assert_eq!(changes.status, "published");
+        assert!(changes.published_at.is_some());
+        assert_eq!(changes.capacity, Some(20));
+        assert_eq!(changes.tags, vec!["rust".to_string(), "后端".to_string()]);
+    }
+
+    #[test]
+    fn build_publish_changes_rejects_empty_draft_content() {
+        build_publish_changes(draft_event(empty_content_doc()))
+            .expect_err("empty draft should not publish");
     }
 }

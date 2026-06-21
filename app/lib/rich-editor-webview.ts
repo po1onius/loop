@@ -2,7 +2,7 @@ import CharacterCount from "@tiptap/extension-character-count";
 import Link from "@tiptap/extension-link";
 import Placeholder from "@tiptap/extension-placeholder";
 import Underline from "@tiptap/extension-underline";
-import { Editor, Node, mergeAttributes } from "@tiptap/core";
+import { Editor, Extension, Node, mergeAttributes } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
 
 type EventTextMark =
@@ -81,6 +81,30 @@ const createBlockId = () =>
 let editor: Editor | null = null;
 const buttons = Array.from(document.querySelectorAll<HTMLButtonElement>(".toolbar button"));
 
+const EventBlockId = Extension.create({
+  name: "eventBlockId",
+
+  addGlobalAttributes() {
+    return [
+      {
+        types: ["paragraph", "heading", "blockquote", "horizontalRule"],
+        attributes: {
+          eventBlockId: {
+            default: null,
+            parseHTML: (element) => element.getAttribute("data-event-block-id"),
+            renderHTML: (attributes) => {
+              const id = attributes["eventBlockId"];
+              return typeof id === "string" && id.trim()
+                ? { "data-event-block-id": id }
+                : {};
+            },
+          },
+        },
+      },
+    ];
+  },
+});
+
 const EventImage = Node.create({
   name: "eventImage",
   group: "block",
@@ -94,6 +118,7 @@ const EventImage = Node.create({
       width: { default: 1 },
       height: { default: 1 },
       alt: { default: null },
+      eventBlockId: { default: null },
     };
   },
 
@@ -137,6 +162,7 @@ editor = new Editor({
       underline: false,
     }),
     Underline,
+    EventBlockId,
     Link.configure({
       autolink: true,
       defaultProtocol: "https",
@@ -312,6 +338,7 @@ function insertUploadedImage(payload: UploadedImagePayload) {
         width: Math.max(1, Number(payload.width) || 1),
         height: Math.max(1, Number(payload.height) || 1),
         alt: payload.alt || "活动图片",
+        eventBlockId: createBlockId(),
       },
     })
     .run();
@@ -323,6 +350,7 @@ function exportContent(requestId: string) {
     if (!currentEditor) {
       throw new Error("editor is not initialized");
     }
+    assignMissingBlockIds(currentEditor);
     const doc = currentEditor.getJSON() as ProseMirrorNode;
     const blocks = toEventBlocks(doc);
     const textLength = countText(blocks);
@@ -339,6 +367,22 @@ function exportContent(requestId: string) {
     });
   } catch (error) {
     log("error", "export editor content failed", String(error));
+  }
+}
+
+function assignMissingBlockIds(currentEditor: Editor) {
+  let tr = currentEditor.state.tr;
+  currentEditor.state.doc.forEach((node, offset) => {
+    if (typeof node.attrs["eventBlockId"] === "string" && node.attrs["eventBlockId"].trim()) {
+      return;
+    }
+    tr = tr.setNodeMarkup(offset, undefined, {
+      ...node.attrs,
+      eventBlockId: createBlockId(),
+    });
+  });
+  if (tr.docChanged) {
+    currentEditor.view.dispatch(tr);
   }
 }
 

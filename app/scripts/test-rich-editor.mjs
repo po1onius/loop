@@ -51,6 +51,17 @@ assert(imageBlock, "inserted image should be exported as image block");
 assert(imageBlock.item.asset_id === "asset_test", "image block should preserve asset id");
 assert(imageDoc.imageCount === 1, "image count should include inserted image");
 
+dom.window.loopEditor.exportContent("image_doc_again");
+const imageDocAgain = await waitForMessage("content", (message) => {
+  return message.requestId === "image_doc_again";
+});
+const imageBlockAgain = imageDocAgain.doc.blocks.find((block) => block.type === "image");
+assert(imageBlockAgain, "inserted image should still be exported as image block");
+assert(
+  imageBlockAgain.id === imageBlock.id,
+  "block id should remain stable across repeated exports",
+);
+
 console.info("rich editor WebView contract ok");
 
 function waitForMessage(type, predicate = () => true) {

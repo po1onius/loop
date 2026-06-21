@@ -101,6 +101,26 @@ pub struct EventDraftChanges {
     pub tags: Vec<String>,
 }
 
+#[derive(AsChangeset, Debug)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+#[diesel(table_name = events)]
+#[diesel(treat_none_as_null = true)]
+pub struct PublishEventDraftChanges {
+    pub title: String,
+    pub content_version: i32,
+    pub content_doc: serde_json::Value,
+    pub summary: String,
+    pub cover_asset_id: Option<String>,
+    pub start_at: Option<DateTime<Utc>>,
+    pub end_at: Option<DateTime<Utc>>,
+    pub location_name: Option<String>,
+    pub location_address: Option<String>,
+    pub capacity: Option<i32>,
+    pub tags: Vec<String>,
+    pub status: String,
+    pub published_at: Option<DateTime<Utc>>,
+}
+
 #[derive(Queryable, Selectable, Debug)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
 #[diesel(table_name = media_assets)]
@@ -266,6 +286,34 @@ impl Event {
     }
 
     #[tracing::instrument(
+        name = "db.event.select_owned_draft_for_update",
+        skip(conn),
+        fields(
+            db.system = "postgresql",
+            db.operation = "select_for_update",
+            db.table = "events",
+            event.id = event_id,
+            user.id = owner_id,
+        )
+    )]
+    pub async fn select_owned_draft_for_update(
+        event_id: i64,
+        owner_id: i64,
+        conn: &mut DieselConn,
+    ) -> Result<Option<Self>, diesel::result::Error> {
+        // 发布草稿时先锁定目标行，避免自动保存或重复发布在校验和发布之间插入竞态写入。
+        events::table
+            .filter(events::event_id.eq(event_id))
+            .filter(events::creator_id.eq(owner_id))
+            .filter(events::status.eq("draft"))
+            .select(Self::as_select())
+            .for_update()
+            .first::<Self>(conn)
+            .await
+            .optional()
+    }
+
+    #[tracing::instrument(
         name = "db.event.update_draft",
         skip(changes, conn),
         fields(
@@ -323,6 +371,62 @@ impl Event {
         ))
         .returning(Self::as_returning())
         .get_result::<Self>(conn)
+        .await
+    }
+
+    #[tracing::instrument(
+        name = "db.event.publish_draft_with_changes",
+        skip(changes, conn),
+        fields(
+            db.system = "postgresql",
+            db.operation = "update",
+            db.table = "events",
+            event.id = event_id,
+            user.id = owner_id,
+        )
+    )]
+    pub async fn publish_draft_with_changes(
+        event_id: i64,
+        owner_id: i64,
+        changes: PublishEventDraftChanges,
+        conn: &mut DieselConn,
+    ) -> Result<Self, diesel::result::Error> {
+        // 把发布时的规范化内容和状态切换放进同一条 UPDATE，保证返回的已发布活动就是刚校验过的快照。
+        diesel::update(
+            events::table
+                .filter(events::event_id.eq(event_id))
+                .filter(events::creator_id.eq(owner_id))
+                .filter(events::status.eq("draft")),
+        )
+        .set(changes)
+        .returning(Self::as_returning())
+        .get_result::<Self>(conn)
+        .await
+    }
+
+    #[tracing::instrument(
+        name = "db.event.delete_draft",
+        skip(conn),
+        fields(
+            db.system = "postgresql",
+            db.operation = "delete",
+            db.table = "events",
+            event.id = event_id,
+            user.id = owner_id,
+        )
+    )]
+    pub async fn delete_draft(
+        event_id: i64,
+        owner_id: i64,
+        conn: &mut DieselConn,
+    ) -> Result<usize, diesel::result::Error> {
+        diesel::delete(
+            events::table
+                .filter(events::event_id.eq(event_id))
+                .filter(events::creator_id.eq(owner_id))
+                .filter(events::status.eq("draft")),
+        )
+        .execute(conn)
         .await
     }
 }

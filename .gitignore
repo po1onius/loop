@@ -1,6 +1,36 @@
+# Rust build outputs
 target/
 .codex-target/
+
+# JavaScript / Expo local outputs
+node_modules/
+app/.expo/
+app/dist/
+app/web-build/
+app/ios/
+app/android/
+app/expo-env.d.ts
+*.tsbuildinfo
+
+# Local runtime logs
 log/
-app/*.log
-deploy/local/.env
-deploy/local/secrets/
+srv/log/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Local environment and deployment secrets
+.env
+.env.*
+!.env.example
+deploy/**/.env
+deploy/**/secrets/*
+!deploy/**/secrets/.gitkeep
+
+# Local editor / OS files
+.DS_Store
+.idea/
+*.swp
+*.swo

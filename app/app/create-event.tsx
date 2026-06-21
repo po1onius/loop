@@ -28,6 +28,7 @@ import type {
 } from "@/lib/dto";
 import {
   createEventDraft,
+  deleteEventDraft,
   publishEventDraft,
   updateEventDraft,
 } from "@/lib/event-api";
@@ -82,6 +83,9 @@ export default function CreateEventScreen() {
   const draftEventIdRef = useRef<string | null>(null);
   const draftCreatePromiseRef = useRef<Promise<string> | null>(null);
   const lastContentDocRef = useRef<EventContentDoc>(createEmptyContentDoc());
+  const savedContentSignatureRef = useRef("");
+  const draftHasMeaningfulContentRef = useRef(false);
+  const publishedRef = useRef(false);
   const [editorReady, setEditorReady] = useState(false);
   const [draftEventId, setDraftEventId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<CreateEventTab>("meta");
@@ -108,6 +112,16 @@ export default function CreateEventScreen() {
   useEffect(() => {
     return () => {
       mountedRef.current = false;
+      const draftEventId = draftEventIdRef.current;
+      if (
+        draftEventId &&
+        !publishedRef.current &&
+        !draftHasMeaningfulContentRef.current
+      ) {
+        void deleteEventDraft(draftEventId).catch((e) => {
+          console.warn("[create-event] empty draft cleanup failed", e);
+        });
+      }
       if (exportTimeoutRef.current) {
         clearTimeout(exportTimeoutRef.current);
       }
@@ -364,7 +378,6 @@ export default function CreateEventScreen() {
       const normalizedDoc = normalizeContentDoc(doc);
       lastContentDocRef.current = normalizedDoc;
       try {
-        const eventId = await ensureRemoteDraft();
         const req = buildDraftUpdateRequest({
           title,
           doc: normalizedDoc,
@@ -375,9 +388,26 @@ export default function CreateEventScreen() {
           capacityText,
           tagText,
         });
+        const signature = draftRequestSignature(req);
+        if (signature === savedContentSignatureRef.current && draftEventIdRef.current) {
+          setStatus("草稿已保存");
+          return draftEventIdRef.current;
+        }
+        if (!hasMeaningfulDraftContent(req) && !draftEventIdRef.current) {
+          setStatus("");
+          return "";
+        }
+        const hasMeaningfulContent = hasMeaningfulDraftContent(req);
+        const hadRemoteDraft = Boolean(draftEventIdRef.current);
+        const eventId = await ensureRemoteDraft();
+        if (!hadRemoteDraft && hasMeaningfulContent) {
+          draftHasMeaningfulContentRef.current = true;
+        }
         const saved = await updateEventDraft(eventId, req);
         setDraftEventId(saved.event_id);
         draftEventIdRef.current = saved.event_id;
+        savedContentSignatureRef.current = signature;
+        draftHasMeaningfulContentRef.current = hasMeaningfulContent;
         setError("");
         setStatus("草稿已保存");
         return saved.event_id;
@@ -413,10 +443,13 @@ export default function CreateEventScreen() {
           capacityText,
           tagText,
         });
-        validatePublishRequest(req);
+        validatePublishRequest(req, textLength, imageCount);
 
         setStatus("正在保存草稿...");
         const eventId = await saveDraft(normalizedDoc);
+        if (!eventId) {
+          throw new Error("草稿尚未创建，请重试");
+        }
 
         setStatus("正在发布活动...");
         console.info("[create-event] publishing event draft", {
@@ -427,6 +460,7 @@ export default function CreateEventScreen() {
           blockCount: req.content.blocks.length,
         });
         const published = await publishEventDraft(eventId);
+        publishedRef.current = true;
         setStatus("发布成功");
         router.replace(`/event/${encodeURIComponent(published.event_id)}` as never);
       } catch (e) {
@@ -507,35 +541,6 @@ export default function CreateEventScreen() {
       requestEditorExport("autosave");
     }, AUTOSAVE_DEBOUNCE_MS);
   }, [editorReady, requestEditorExport, submitting, uploadingImage]);
-
-  useEffect(() => {
-    let cancelled = false;
-    async function createInitialDraft() {
-      try {
-        await startRemoteDraftCreation({
-          title: null,
-          content: createEmptyContentDoc(),
-          start_at: null,
-          end_at: null,
-          location_name: null,
-          location_address: null,
-          capacity: null,
-          tags: null,
-        });
-      } catch (e) {
-        if (cancelled) {
-          return;
-        }
-        console.warn("[create-event] initial draft create failed", e);
-        setError(e instanceof Error ? e.message : "草稿创建失败");
-      }
-    }
-
-    void createInitialDraft();
-    return () => {
-      cancelled = true;
-    };
-  }, [startRemoteDraftCreation]);
 
   useEffect(() => {
     scheduleAutosave();
@@ -987,13 +992,34 @@ function buildDraftUpdateRequest({
   };
 }
 
-function validatePublishRequest(req: UpdateEventDraftRequest) {
+function validatePublishRequest(
+  req: UpdateEventDraftRequest,
+  textLength: number,
+  imageCount: number,
+) {
   if (!req.title.trim()) {
     throw new Error("请输入活动标题");
   }
-  if (req.content.blocks.length === 0) {
+  if (req.content.blocks.length === 0 || (textLength <= 0 && imageCount <= 0)) {
     throw new Error("请先填写活动正文或插入图片");
   }
+}
+
+function draftRequestSignature(req: UpdateEventDraftRequest): string {
+  return JSON.stringify(req);
+}
+
+function hasMeaningfulDraftContent(req: UpdateEventDraftRequest): boolean {
+  return (
+    Boolean(req.title.trim()) ||
+    req.content.blocks.length > 0 ||
+    Boolean(req.start_at) ||
+    Boolean(req.end_at) ||
+    Boolean(req.location_name?.trim()) ||
+    Boolean(req.location_address?.trim()) ||
+    req.capacity !== null ||
+    req.tags.length > 0
+  );
 }
 
 function createEmptyContentDoc(): EventContentDoc {

@@ -88,6 +88,20 @@ export function publishEventDraft(eventId: string): Promise<EventResp> {
   );
 }
 
+export function deleteEventDraft(eventId: string): Promise<void> {
+  const normalizedEventId = eventId.trim();
+  console.info("[event-api] deleting event draft", {
+    eventId: normalizedEventId,
+  });
+  return requestJson<undefined, void>(
+    `/event/${encodeURIComponent(normalizedEventId)}`,
+    {
+      method: "DELETE",
+      auth: true,
+    },
+  );
+}
+
 export function listMyEvents(
   status?: "draft" | "published" | "cancelled",
   limit = 20,
