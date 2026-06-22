@@ -70,6 +70,10 @@ type ExportPurpose = "autosave" | "publish";
 const EVENT_CONTENT_VERSION = 1;
 const AUTOSAVE_DEBOUNCE_MS = 1500;
 const AUTOSAVE_INTERVAL_MS = 15000;
+const EVENT_TIME_MINUTE_INTERVAL = 5;
+const IOS_PICKER_TEXT_COLOR = "#11181C";
+const IOS_PICKER_ACCENT_COLOR = "#0A7EA4";
+const IOS_PICKER_LOCALE = "zh-Hans-CN";
 
 export default function CreateEventScreen() {
   const webViewRef = useRef<WebView>(null);
@@ -164,6 +168,10 @@ export default function CreateEventScreen() {
   const applyDateTime = useCallback(
     (target: DateTimePickerTarget, value: Date) => {
       const normalized = normalizePickerDate(value);
+      console.info("[create-event] date time applied", {
+        target,
+        value: normalized.toISOString(),
+      });
       if (target === "start") {
         setStartAt(normalized);
         return;
@@ -179,7 +187,13 @@ export default function CreateEventScreen() {
         target === "start"
           ? startAt ?? createDefaultEventDate()
           : endAt ?? (startAt ? addHours(startAt, 2) : createDefaultEventDate());
-      setDraftDateTime(normalizePickerDate(fallback));
+      const normalizedFallback = normalizePickerDate(fallback);
+      console.info("[create-event] opening date time picker", {
+        target,
+        platform: Platform.OS,
+        value: normalizedFallback.toISOString(),
+      });
+      setDraftDateTime(normalizedFallback);
       setDateTimePickerTarget(target);
       setDateTimePickerMode(Platform.OS === "ios" ? "datetime" : "date");
     },
@@ -192,6 +206,7 @@ export default function CreateEventScreen() {
   }, []);
 
   const clearDateTime = useCallback((target: DateTimePickerTarget) => {
+    console.info("[create-event] date time cleared", { target });
     if (target === "start") {
       setStartAt(null);
       return;
@@ -227,6 +242,10 @@ export default function CreateEventScreen() {
       }
 
       if (event.type === "dismissed" || !selectedDate) {
+        console.info("[create-event] date time picker dismissed", {
+          target: dateTimePickerTarget,
+          mode: dateTimePickerMode,
+        });
         closeDateTimePicker();
         return;
       }
@@ -263,7 +282,7 @@ export default function CreateEventScreen() {
         value={draftDateTime}
         mode={androidDateTimePickerMode}
         display={androidDateTimePickerMode === "time" ? "clock" : "calendar"}
-        minuteInterval={5}
+        minuteInterval={EVENT_TIME_MINUTE_INTERVAL}
         onChange={handleDateTimePickerChange}
       />
     ) : null;
@@ -287,13 +306,23 @@ export default function CreateEventScreen() {
                 <ThemedText style={styles.clearText}>清除</ThemedText>
               </Pressable>
             </View>
-            <DateTimePicker
-              value={draftDateTime}
-              mode="datetime"
-              display="spinner"
-              minuteInterval={5}
-              onChange={handleDateTimePickerChange}
-            />
+            <View style={styles.iosDateTimePickerWrap}>
+              {/* iOS wheel picker 会继承系统深浅色外观。弹层固定为白底时，
+                  需要显式指定浅色主题和文字色，避免深色模式下出现白底白字，
+                  真机上看起来只剩中间的选中高亮条。 */}
+              <DateTimePicker
+                value={draftDateTime}
+                mode="datetime"
+                display="spinner"
+                locale={IOS_PICKER_LOCALE}
+                minuteInterval={EVENT_TIME_MINUTE_INTERVAL}
+                textColor={IOS_PICKER_TEXT_COLOR}
+                accentColor={IOS_PICKER_ACCENT_COLOR}
+                themeVariant="light"
+                style={styles.iosDateTimePicker}
+                onChange={handleDateTimePickerChange}
+              />
+            </View>
             <View style={styles.sheetActions}>
               <Pressable
                 accessibilityRole="button"
@@ -1393,6 +1422,17 @@ const styles = StyleSheet.create({
     paddingBottom: 18,
     backgroundColor: "#FFFFFF",
     gap: 14,
+  },
+  iosDateTimePickerWrap: {
+    minHeight: 216,
+    overflow: "hidden",
+    borderRadius: 12,
+    backgroundColor: "#FFFFFF",
+  },
+  iosDateTimePicker: {
+    width: "100%",
+    height: 216,
+    backgroundColor: "#FFFFFF",
   },
   sheetHeader: {
     minHeight: 34,
