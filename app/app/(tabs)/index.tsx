@@ -41,6 +41,8 @@ type DrawerItem = {
   icon: "person.text.rectangle" | "list.bullet.rectangle" | "doc.text";
 };
 
+type EventLoadMode = "background" | "refresh";
+
 const CAROUSEL_ITEMS: CarouselItem[] = [
   {
     id: "1",
@@ -112,32 +114,66 @@ export default function HomeScreen() {
   const { width } = useWindowDimensions();
   const carouselRef = useRef<FlatList<CarouselItem>>(null);
   const drawerTranslateX = useRef(new Animated.Value(-360)).current;
+  const latestEventsRequestIdRef = useRef(0);
+  const activeRefreshRequestIdRef = useRef<number | null>(null);
   const [activeIndex, setActiveIndex] = useState(0);
   const [drawerVisible, setDrawerVisible] = useState(false);
   const [events, setEvents] = useState<EventResp[]>([]);
-  const [loadingEvents, setLoadingEvents] = useState(false);
+  const [refreshingEvents, setRefreshingEvents] = useState(false);
   const [eventsError, setEventsError] = useState("");
   const slideWidth = Math.max(width - 32, 1);
   const drawerWidth = Math.min(Math.max(width * 0.78, 260), 320);
 
-  const loadEvents = useCallback(async () => {
-    setLoadingEvents(true);
+  const loadEvents = useCallback(async (mode: EventLoadMode = "background") => {
+    const requestId = latestEventsRequestIdRef.current + 1;
+    latestEventsRequestIdRef.current = requestId;
+    if (mode === "refresh") {
+      activeRefreshRequestIdRef.current = requestId;
+      setRefreshingEvents(true);
+    }
     setEventsError("");
     try {
+      console.info("[home] loading events", { mode, requestId });
       const resp = await listEvents();
+      if (latestEventsRequestIdRef.current !== requestId) {
+        console.info("[home] ignored stale events response", {
+          mode,
+          requestId,
+        });
+        return;
+      }
       setEvents(resp.items);
     } catch (e) {
+      if (latestEventsRequestIdRef.current !== requestId) {
+        return;
+      }
       setEventsError(e instanceof Error ? e.message : "活动列表加载失败");
     } finally {
-      setLoadingEvents(false);
+      if (
+        mode === "refresh" &&
+        activeRefreshRequestIdRef.current === requestId
+      ) {
+        activeRefreshRequestIdRef.current = null;
+        setRefreshingEvents(false);
+      }
     }
   }, []);
 
   useFocusEffect(
     useCallback(() => {
-      void loadEvents();
+      // 页面重新获得焦点时静默刷新数据，避免触发 FlatList 的下拉刷新动画。
+      void loadEvents("background");
+      return () => {
+        latestEventsRequestIdRef.current += 1;
+        activeRefreshRequestIdRef.current = null;
+        setRefreshingEvents(false);
+      };
     }, [loadEvents]),
   );
+
+  const handleRefreshEvents = useCallback(() => {
+    void loadEvents("refresh");
+  }, [loadEvents]);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -303,8 +339,8 @@ export default function HomeScreen() {
             style={styles.list}
             showsVerticalScrollIndicator={false}
             contentContainerStyle={styles.listContent}
-            refreshing={loadingEvents}
-            onRefresh={loadEvents}
+            refreshing={refreshingEvents}
+            onRefresh={handleRefreshEvents}
             renderItem={({ item }) => (
               <Pressable
                 accessibilityRole="button"
