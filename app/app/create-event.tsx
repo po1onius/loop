@@ -34,6 +34,7 @@ import {
 } from "@/lib/event-api";
 import { uploadLocalImageAsset } from "@/lib/media-api";
 import { EVENT_RICH_EDITOR_HTML } from "@/lib/rich-editor-html";
+import { useThemeColor } from "@/hooks/use-theme-color";
 
 type NativeDateTimePickerMode = "date" | "time" | "datetime";
 
@@ -54,13 +55,32 @@ type EditorMessage =
       extra: unknown;
     };
 
+type LocalImagePayload = {
+  localId: string;
+  previewUri: string;
+  width: number;
+  height: number;
+  alt?: string;
+};
+
 type UploadedImagePayload = {
+  localId: string;
   assetId: string;
-  uri: string;
+  uri?: string;
   publicUrl?: string;
   width: number;
   height: number;
   alt?: string;
+};
+
+type FailedImagePayload = {
+  localId: string;
+  reason?: string;
+};
+
+type ImagePreviewSource = {
+  uri: string;
+  kind: "data-uri" | "file-uri";
 };
 
 type DateTimePickerTarget = "start" | "end";
@@ -74,8 +94,11 @@ const EVENT_TIME_MINUTE_INTERVAL = 5;
 const IOS_PICKER_TEXT_COLOR = "#11181C";
 const IOS_PICKER_ACCENT_COLOR = "#0A7EA4";
 const IOS_PICKER_LOCALE = "zh-Hans-CN";
+const MAX_EDITOR_PREVIEW_DATA_URI_CHARS = 4_000_000;
 
 export default function CreateEventScreen() {
+  // 背景铺到 SafeArea/KeyboardAvoidingView，避免状态栏和键盘圆角露出底层原生背景。
+  const screenBackground = useThemeColor({}, "background");
   const webViewRef = useRef<WebView>(null);
   const pendingRequestIdRef = useRef<string | null>(null);
   const pendingExportPurposeRef = useRef<ExportPurpose | null>(null);
@@ -599,9 +622,21 @@ export default function CreateEventScreen() {
     };
   }, [editorReady, requestEditorExport]);
 
-  const injectUploadedImage = useCallback((payload: UploadedImagePayload) => {
+  const injectLocalImage = useCallback((payload: LocalImagePayload) => {
     webViewRef.current?.injectJavaScript(
-      `window.loopEditor?.insertUploadedImage(${JSON.stringify(payload)}); true;`,
+      `window.loopEditor?.insertLocalImage(${JSON.stringify(payload)}); true;`,
+    );
+  }, []);
+
+  const updateUploadedImage = useCallback((payload: UploadedImagePayload) => {
+    webViewRef.current?.injectJavaScript(
+      `window.loopEditor?.updateUploadedImage(${JSON.stringify(payload)}); true;`,
+    );
+  }, []);
+
+  const markImageUploadFailed = useCallback((payload: FailedImagePayload) => {
+    webViewRef.current?.injectJavaScript(
+      `window.loopEditor?.markImageUploadFailed(${JSON.stringify(payload)}); true;`,
     );
   }, []);
 
@@ -624,15 +659,44 @@ export default function CreateEventScreen() {
         allowsMultipleSelection: true,
         orderedSelection: true,
         selectionLimit: 9,
+        base64: true,
         quality: 0.92,
       });
       if (result.canceled || !result.assets.length) {
         return;
       }
 
-      for (const [index, asset] of result.assets.entries()) {
+      const pickedImages = result.assets.map((asset, index) => {
+        const localId = createLocalImageId(index);
+        const preview = createEditorImagePreviewSource(asset);
+        const alt = asset.fileName ?? "活动图片";
+        return { alt, asset, index, localId, preview };
+      });
+
+      // 先把全部本地预览插入正文，再逐张上传；多选大图时用户不用等第一张上传完成。
+      for (const { alt, asset, index, localId, preview } of pickedImages) {
+        injectLocalImage({
+          localId,
+          previewUri: preview.uri,
+          width: asset.width,
+          height: asset.height,
+          alt,
+        });
+        console.info("[create-event] inserted local image preview", {
+          localId,
+          index,
+          previewKind: preview.kind,
+          width: asset.width,
+          height: asset.height,
+        });
+      }
+
+      let uploadedCount = 0;
+      let failedCount = 0;
+      for (const { alt, asset, index, localId } of pickedImages) {
         setStatus(`正在上传图片 ${index + 1}/${result.assets.length}...`);
         console.info("[create-event] uploading picked image", {
+          localId,
           index,
           width: asset.width,
           height: asset.height,
@@ -640,37 +704,65 @@ export default function CreateEventScreen() {
           fileSize: asset.fileSize,
         });
 
-        const uploaded = await uploadLocalImageAsset({
-          uri: asset.uri,
-          mimeType: asset.mimeType ?? null,
-          fileName: asset.fileName ?? null,
-          width: asset.width,
-          height: asset.height,
-          file: asset.file ?? null,
-        });
+        try {
+          const uploaded = await uploadLocalImageAsset({
+            uri: asset.uri,
+            mimeType: asset.mimeType ?? null,
+            fileName: asset.fileName ?? null,
+            width: asset.width,
+            height: asset.height,
+            file: asset.file ?? null,
+          });
 
-        const imagePayload: UploadedImagePayload = {
-          assetId: uploaded.asset_id,
-          uri: asset.uri,
-          width: uploaded.width ?? asset.width,
-          height: uploaded.height ?? asset.height,
-          alt: asset.fileName ?? "活动图片",
-        };
-        if (uploaded.public_url) {
-          imagePayload.publicUrl = uploaded.public_url;
+          const imagePayload: UploadedImagePayload = {
+            localId,
+            assetId: uploaded.asset_id,
+            width: uploaded.width ?? asset.width,
+            height: uploaded.height ?? asset.height,
+            alt,
+          };
+          if (uploaded.public_url) {
+            imagePayload.publicUrl = uploaded.public_url;
+          }
+          updateUploadedImage(imagePayload);
+          uploadedCount += 1;
+        } catch (uploadError) {
+          failedCount += 1;
+          const reason =
+            uploadError instanceof Error ? uploadError.message : "图片上传失败";
+          console.warn("[create-event] picked image upload failed", {
+            localId,
+            index,
+            reason,
+          });
+          markImageUploadFailed({ localId, reason });
         }
-        injectUploadedImage(imagePayload);
       }
 
-      setStatus(`${result.assets.length} 张图片已插入正文`);
-      scheduleAutosave();
+      if (uploadedCount > 0) {
+        setStatus(
+          failedCount > 0
+            ? `${uploadedCount} 张图片已插入正文，${failedCount} 张上传失败`
+            : `${uploadedCount} 张图片已插入正文`,
+        );
+        scheduleAutosave();
+      }
+      if (failedCount > 0 && uploadedCount === 0) {
+        setError(`${failedCount} 张图片上传失败，失败图片不会发布`);
+      }
     } catch (e) {
       console.warn("[create-event] image pick/upload failed", e);
       setError(e instanceof Error ? e.message : "图片上传失败");
     } finally {
       setUploadingImage(false);
     }
-  }, [busy, injectUploadedImage, scheduleAutosave]);
+  }, [
+    busy,
+    injectLocalImage,
+    markImageUploadFailed,
+    scheduleAutosave,
+    updateUploadedImage,
+  ]);
 
   const handleEditorMessage = useCallback(
     (event: WebViewMessageEvent) => {
@@ -746,12 +838,17 @@ export default function CreateEventScreen() {
   }, [busy, editorReady, requestEditorExport, title]);
 
   return (
-    <SafeAreaView style={styles.safeArea} edges={["top", "left", "right"]}>
+    <SafeAreaView
+      style={[styles.safeArea, { backgroundColor: screenBackground }]}
+      edges={["top", "left", "right"]}
+    >
       <KeyboardAvoidingView
         behavior={Platform.OS === "ios" ? "padding" : undefined}
-        style={styles.flex}
+        style={[styles.flex, { backgroundColor: screenBackground }]}
       >
-        <ThemedView style={styles.container}>
+        <ThemedView
+          style={[styles.container, { backgroundColor: screenBackground }]}
+        >
           <View style={styles.header}>
             <Pressable
               accessibilityRole="button"
@@ -1063,6 +1160,65 @@ function normalizeContentDoc(doc: EventContentDoc): EventContentDoc {
     version: EVENT_CONTENT_VERSION,
     blocks: doc.blocks,
   };
+}
+
+function createLocalImageId(index: number): string {
+  return `local_img_${Date.now().toString(36)}_${index}_${Math.random()
+    .toString(36)
+    .slice(2, 8)}`;
+}
+
+function createEditorImagePreviewSource(
+  asset: ImagePicker.ImagePickerAsset,
+): ImagePreviewSource {
+  // WebView 对 file:// 图片的解码兼容性不稳定，优先用 data URI；过大时回退文件 URI，避免 JS 注入超长脚本。
+  const dataUri = createImageDataUri(asset);
+  if (dataUri && dataUri.length <= MAX_EDITOR_PREVIEW_DATA_URI_CHARS) {
+    return { uri: dataUri, kind: "data-uri" };
+  }
+
+  if (dataUri) {
+    console.info("[create-event] image preview data uri too large, using file uri", {
+      length: dataUri.length,
+      limit: MAX_EDITOR_PREVIEW_DATA_URI_CHARS,
+      fileName: asset.fileName ?? "",
+    });
+  }
+  return { uri: asset.uri, kind: "file-uri" };
+}
+
+function createImageDataUri(asset: ImagePicker.ImagePickerAsset): string | null {
+  const base64 = asset.base64?.trim();
+  if (!base64) {
+    return null;
+  }
+  const mimeType = normalizePreviewMimeType(
+    asset.mimeType,
+    asset.fileName ?? asset.uri,
+  );
+  return `data:${mimeType};base64,${base64}`;
+}
+
+function normalizePreviewMimeType(
+  value: string | null | undefined,
+  fallbackName: string,
+): string {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized?.startsWith("image/")) {
+    return normalized;
+  }
+
+  const lowerName = fallbackName.toLowerCase();
+  if (lowerName.endsWith(".png")) {
+    return "image/png";
+  }
+  if (lowerName.endsWith(".webp")) {
+    return "image/webp";
+  }
+  if (lowerName.endsWith(".gif")) {
+    return "image/gif";
+  }
+  return "image/jpeg";
 }
 
 function parseEditorMessage(raw: string): EditorMessage | null {

@@ -28,13 +28,32 @@ type EventContentBlock =
   | { type: "image"; id: string; item: EventContentImage; caption: string | null }
   | { type: "divider"; id: string };
 
+type LocalImagePayload = {
+  localId: string;
+  previewUri: string;
+  width: number;
+  height: number;
+  alt?: string;
+};
+
 type UploadedImagePayload = {
+  localId?: string;
   assetId: string;
-  uri: string;
+  uri?: string;
   publicUrl?: string;
   width: number;
   height: number;
   alt?: string;
+};
+
+type FailedImagePayload = {
+  localId: string;
+  reason?: string;
+};
+
+type ImageNodeMatch = {
+  attrs: Record<string, unknown>;
+  pos: number;
 };
 
 type ProseMirrorNode = {
@@ -59,7 +78,10 @@ declare global {
     ReactNativeWebView?: NativeBridge;
     loopEditor?: {
       exportContent: (requestId: string) => void;
+      insertLocalImage: (payload: LocalImagePayload) => void;
       insertUploadedImage: (payload: UploadedImagePayload) => void;
+      updateUploadedImage: (payload: UploadedImagePayload) => void;
+      markImageUploadFailed: (payload: FailedImagePayload) => void;
     };
   }
 }
@@ -113,11 +135,13 @@ const EventImage = Node.create({
 
   addAttributes() {
     return {
+      localId: { default: "" },
       assetId: { default: "" },
       src: { default: "" },
       width: { default: 1 },
       height: { default: 1 },
       alt: { default: null },
+      uploadState: { default: "uploaded" },
       eventBlockId: { default: null },
     };
   },
@@ -129,6 +153,8 @@ const EventImage = Node.create({
   renderHTML({ HTMLAttributes }) {
     const src = String(HTMLAttributes["src"] || "");
     const alt = String(HTMLAttributes["alt"] || "活动图片");
+    const localId = String(HTMLAttributes["localId"] || "");
+    const uploadState = normalizeUploadState(HTMLAttributes["uploadState"]);
     const width = Number(HTMLAttributes["width"]) || 1;
     const height = Number(HTMLAttributes["height"]) || 1;
     const ratio = Math.min(Math.max(width / height, 0.56), 2.4);
@@ -136,10 +162,12 @@ const EventImage = Node.create({
       "figure",
       mergeAttributes(HTMLAttributes, {
         "data-event-image": "true",
+        "data-local-id": localId,
+        "data-upload-state": uploadState,
         contenteditable: "false",
       }),
       ["img", { src, alt, style: `aspect-ratio: ${ratio}` }],
-      ["figcaption", {}, "图片已上传"],
+      ["figcaption", {}, imageCaptionForState(uploadState)],
     ];
   },
 });
@@ -321,6 +349,47 @@ buttons.forEach((button) => {
   button.addEventListener("click", () => applyToolbarAction(button));
 });
 
+function insertLocalImage(payload: LocalImagePayload) {
+  const currentEditor = editor;
+  if (!currentEditor) {
+    return;
+  }
+
+  const localId = payload.localId.trim();
+  const previewUri = payload.previewUri.trim();
+  if (!localId || !previewUri) {
+    log("warn", "skip invalid local image payload", {
+      localId,
+      hasPreview: Boolean(previewUri),
+    });
+    return;
+  }
+
+  log("info", "inserting local image preview", {
+    localId,
+    width: payload.width,
+    height: payload.height,
+  });
+
+  currentEditor
+    .chain()
+    .focus()
+    .insertContent({
+      type: "eventImage",
+      attrs: {
+        localId,
+        assetId: "",
+        src: previewUri,
+        width: Math.max(1, Number(payload.width) || 1),
+        height: Math.max(1, Number(payload.height) || 1),
+        alt: payload.alt || "活动图片",
+        uploadState: "uploading",
+        eventBlockId: createBlockId(),
+      },
+    })
+    .run();
+}
+
 function insertUploadedImage(payload: UploadedImagePayload) {
   const currentEditor = editor;
   if (!currentEditor) {
@@ -332,16 +401,98 @@ function insertUploadedImage(payload: UploadedImagePayload) {
     .focus()
     .insertContent({
       type: "eventImage",
-      attrs: {
-        assetId: payload.assetId,
-        src: payload.uri || payload.publicUrl || "",
-        width: Math.max(1, Number(payload.width) || 1),
-        height: Math.max(1, Number(payload.height) || 1),
-        alt: payload.alt || "活动图片",
-        eventBlockId: createBlockId(),
-      },
+      attrs: uploadedImageAttrs(payload, createBlockId()),
     })
     .run();
+}
+
+function updateUploadedImage(payload: UploadedImagePayload) {
+  const currentEditor = editor;
+  if (!currentEditor) {
+    return;
+  }
+
+  const match = findImageNodeByLocalId(currentEditor, payload.localId);
+  if (!match) {
+    log("warn", "uploaded image preview node missing, inserting uploaded image", {
+      localId: payload.localId ?? "",
+      assetId: payload.assetId,
+    });
+    insertUploadedImage(payload);
+    return;
+  }
+
+  const src = payload.publicUrl || payload.uri || String(match.attrs["src"] || "");
+  const nextAttrs = {
+    ...match.attrs,
+    ...uploadedImageAttrs(
+      { ...payload, uri: src },
+      String(match.attrs["eventBlockId"] || createBlockId()),
+    ),
+    src,
+  };
+  currentEditor.view.dispatch(
+    currentEditor.state.tr.setNodeMarkup(match.pos, undefined, nextAttrs),
+  );
+}
+
+function markImageUploadFailed(payload: FailedImagePayload) {
+  const currentEditor = editor;
+  if (!currentEditor) {
+    return;
+  }
+
+  const match = findImageNodeByLocalId(currentEditor, payload.localId);
+  if (!match) {
+    log("warn", "failed image preview node missing", {
+      localId: payload.localId,
+      reason: payload.reason ?? "",
+    });
+    return;
+  }
+
+  currentEditor.view.dispatch(
+    currentEditor.state.tr.setNodeMarkup(match.pos, undefined, {
+      ...match.attrs,
+      uploadState: "failed",
+    }),
+  );
+}
+
+function uploadedImageAttrs(payload: UploadedImagePayload, eventBlockId: string) {
+  return {
+    localId: payload.localId || "",
+    assetId: payload.assetId,
+    src: payload.uri || payload.publicUrl || "",
+    width: Math.max(1, Number(payload.width) || 1),
+    height: Math.max(1, Number(payload.height) || 1),
+    alt: payload.alt || "活动图片",
+    uploadState: "uploaded",
+    eventBlockId,
+  };
+}
+
+function findImageNodeByLocalId(
+  currentEditor: Editor,
+  localId: string | undefined,
+): ImageNodeMatch | null {
+  const normalizedLocalId = localId?.trim();
+  if (!normalizedLocalId) {
+    return null;
+  }
+
+  let match: ImageNodeMatch | null = null;
+  currentEditor.state.doc.descendants((node, pos) => {
+    if (match || node.type.name !== "eventImage") {
+      return true;
+    }
+    if (node.attrs["localId"] === normalizedLocalId) {
+      match = { attrs: { ...node.attrs }, pos };
+      return false;
+    }
+    return true;
+  });
+  return match;
 }
 
 function exportContent(requestId: string) {
@@ -416,6 +567,14 @@ function toEventBlock(node: ProseMirrorNode): EventContentBlock | null {
       return { type: "quote", id, children };
     }
     case "eventImage":
+      // 正文内容只保存后端媒体资产；上传中或失败的本地预览不能写入活动内容。
+      if (!String(node.attrs?.["assetId"] || "").trim()) {
+        log("info", "skip transient editor image without asset id", {
+          localId: String(node.attrs?.["localId"] || ""),
+          uploadState: String(node.attrs?.["uploadState"] || ""),
+        });
+        return null;
+      }
       return {
         type: "image",
         id,
@@ -531,6 +690,23 @@ function nullableText(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+function normalizeUploadState(value: unknown): "uploading" | "uploaded" | "failed" {
+  if (value === "uploading" || value === "failed") {
+    return value;
+  }
+  return "uploaded";
+}
+
+function imageCaptionForState(state: "uploading" | "uploaded" | "failed"): string {
+  if (state === "uploading") {
+    return "图片上传中...";
+  }
+  if (state === "failed") {
+    return "图片上传失败";
+  }
+  return "图片已上传";
+}
+
 function countText(blocks: EventContentBlock[]): number {
   return blocks.reduce((total, block) => {
     if (!("children" in block)) {
@@ -550,5 +726,8 @@ function countText(blocks: EventContentBlock[]): number {
 
 window.loopEditor = {
   exportContent,
+  insertLocalImage,
   insertUploadedImage,
+  updateUploadedImage,
+  markImageUploadFailed,
 };

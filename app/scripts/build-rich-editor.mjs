@@ -43,6 +43,9 @@ const html = `<!doctype html>
         --muted: #687076;
         --accent: #0a7ea4;
         --quote: #eef7fb;
+        --image-check-a: #eef2f6;
+        --image-check-b: #ffffff;
+        --danger: #c2410c;
       }
 
       @media (prefers-color-scheme: dark) {
@@ -53,6 +56,9 @@ const html = `<!doctype html>
           --text: #ecedee;
           --muted: #9ba1a6;
           --quote: #172c35;
+          --image-check-a: #2c333a;
+          --image-check-b: #20272e;
+          --danger: #fb923c;
         }
       }
 
@@ -189,12 +195,31 @@ const html = `<!doctype html>
         background: var(--panel);
       }
 
+      figure[data-upload-state="uploading"] {
+        border-style: dashed;
+      }
+
+      figure[data-upload-state="failed"] {
+        border-color: var(--danger);
+      }
+
       figure img {
         display: block;
         width: 100%;
         max-height: 480px;
         object-fit: contain;
-        background: #000000;
+        background-color: var(--image-check-b);
+        background-image:
+          linear-gradient(45deg, var(--image-check-a) 25%, transparent 25%),
+          linear-gradient(-45deg, var(--image-check-a) 25%, transparent 25%),
+          linear-gradient(45deg, transparent 75%, var(--image-check-a) 75%),
+          linear-gradient(-45deg, transparent 75%, var(--image-check-a) 75%);
+        background-position:
+          0 0,
+          0 8px,
+          8px -8px,
+          -8px 0;
+        background-size: 16px 16px;
       }
 
       figure figcaption {
@@ -202,6 +227,14 @@ const html = `<!doctype html>
         color: var(--muted);
         font-size: 13px;
         line-height: 18px;
+      }
+
+      figure[data-upload-state="uploading"] figcaption {
+        color: var(--accent);
+      }
+
+      figure[data-upload-state="failed"] figcaption {
+        color: var(--danger);
       }
 
       hr {

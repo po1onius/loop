@@ -35,9 +35,26 @@ assert(emptyDoc.doc.version === 1, "empty doc should use content version 1");
 assert(Array.isArray(emptyDoc.doc.blocks), "empty doc blocks should be an array");
 assert(emptyDoc.doc.blocks.length === 0, "empty editor should export no blocks");
 
-dom.window.loopEditor.insertUploadedImage({
+dom.window.loopEditor.insertLocalImage({
+  localId: "local_test",
+  previewUri: "data:image/png;base64,dGVzdA==",
+  width: 640,
+  height: 480,
+  alt: "测试图片",
+});
+dom.window.loopEditor.exportContent("local_preview_doc");
+const localPreviewDoc = await waitForMessage("content", (message) => {
+  return message.requestId === "local_preview_doc";
+});
+assert(
+  localPreviewDoc.doc.blocks.length === 0,
+  "local preview image without asset id should not be exported",
+);
+
+dom.window.loopEditor.updateUploadedImage({
+  localId: "local_test",
   assetId: "asset_test",
-  uri: "file:///tmp/test.jpg",
+  publicUrl: "https://loop.local/test.jpg",
   width: 640,
   height: 480,
   alt: "测试图片",
@@ -60,6 +77,24 @@ assert(imageBlockAgain, "inserted image should still be exported as image block"
 assert(
   imageBlockAgain.id === imageBlock.id,
   "block id should remain stable across repeated exports",
+);
+
+dom.window.loopEditor.insertUploadedImage({
+  assetId: "asset_direct",
+  uri: "file:///tmp/direct.jpg",
+  width: 320,
+  height: 240,
+  alt: "直接插入图片",
+});
+dom.window.loopEditor.exportContent("direct_image_doc");
+const directImageDoc = await waitForMessage("content", (message) => {
+  return message.requestId === "direct_image_doc";
+});
+assert(
+  directImageDoc.doc.blocks.some(
+    (block) => block.type === "image" && block.item.asset_id === "asset_direct",
+  ),
+  "direct uploaded image insertion should remain supported",
 );
 
 console.info("rich editor WebView contract ok");
