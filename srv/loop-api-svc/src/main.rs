@@ -31,7 +31,7 @@ use crate::{
     },
 };
 
-pub const SERVICE_NAME: &str = "loop-event-svc";
+pub const SERVICE_NAME: &str = "loop-api-svc";
 
 #[tokio::main]
 async fn main() -> ExitCode {

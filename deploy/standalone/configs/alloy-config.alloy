@@ -7,12 +7,12 @@ logging {
 // - Rust tracing spans are exported through OTLP to Tempo by the service.
 // - Rust tracing events are formatted as JSON log lines and tailed here.
 // - Alloy sends only logs to Loki; it does not replace the OTLP trace pipeline.
-loki.source.file "loop_event_svc" {
+loki.source.file "loop_api_svc" {
   targets = [
     {
-      __path__      = "/var/log/loop/loop-event-svc.log*",
-      job           = "loop-event-svc",
-      service_name  = "loop-event-svc",
+      __path__      = "/var/log/loop/loop-api-svc.log*",
+      job           = "loop-api-svc",
+      service_name  = "loop-api-svc",
       log_transport = "file",
     },
   ]

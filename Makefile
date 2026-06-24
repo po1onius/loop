@@ -60,4 +60,4 @@ backend-up:
 	export LOOP_ENV="$${LOOP_ENV:-local}"; \
 	export LOOP_LOG_DIR="$${host_log_dir}"; \
 	export OTEL_EXPORTER_OTLP_TRACES_ENDPOINT="$${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:-http://127.0.0.1:$${LOOP_OTEL_GRPC_PORT:-4317}}"; \
-	cd "$(SRV_DIR)" && $(CARGO) run -p loop-event-svc
+	cd "$(SRV_DIR)" && $(CARGO) run -p loop-api-svc

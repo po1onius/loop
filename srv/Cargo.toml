@@ -1,9 +1,8 @@
 [workspace]
 members = [
     "loop-infra",
-    "loop-event-svc",
-    "loop-im-svc",
-    "loop-community-svc",
+    "loop-api-svc",
+    "loop-realtime-svc",
     "loop-svc-model"
 ]
 resolver = "3"
@@ -37,9 +36,9 @@ opentelemetry_sdk = { version = "0.30", features = ["trace"] }
 tracing-opentelemetry = "0.31"
 redis = "*"
 deadpool-redis = "*"
-rand = { version = "*", features = ["thread_rng"] }
+rand = { version = "0.10.1", features = ["thread_rng"] }
 lettre = { version = "*", default-features = false, features = ["rustls-tls", "builder", "smtp-transport", "tokio1", "tokio1-rustls"] }
-http = "*"
+http = "1"
 tower-http = { version = "*", features = ["cors", "request-id", "trace"] }
 sha2 = "*"
 hex = "*"

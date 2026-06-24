@@ -21,19 +21,21 @@ app目录下，使用`react native` + typescript实现的客户端app
 
 后端都在srv目录下，具体目录：
 
-1. loop-event-svc: 服务器核心业务“活动”相关实现
-2. loop-im-svc: 服务器活动对应群聊功能实现
-3. loop-community-svc: 服务器社区板块功能实现
-4. loop-svc-model: 服务器数据结构以及相关数据库操作
+1. loop-api-svc: 客户端主 HTTP API，承载账号、活动、媒体上传入口、报名、社区等普通请求/响应型业务
+2. loop-realtime-svc: 长连接运行时服务预留，后续承载 WebSocket、活动群聊、在线状态、消息投递等实时能力
+3. loop-svc-model: 服务器数据结构以及相关数据库操作
+4. loop-infra: 数据库、Redis、对象存储、邮件、可观测性等基础设施封装
+
+后端服务按运行特征拆分，而不是按页面或业务名提前拆分。当前阶段普通业务优先沉淀在 `loop-api-svc` 的内部模块中，避免社区、活动、报名、用户关系等高耦合功能过早跨服务调用。只有长连接、异步任务、媒体处理、搜索索引、通知推送等运行模型明显不同的能力，才在需要时拆成独立进程或 worker。
 
 ## K8s 配置约定
 
-后端不依赖配置中心，部署到 K8s 时使用 `ConfigMap` 管理普通配置，使用 `Secret` 管理敏感配置。启动时基础设施配置由 `loop-infra` 统一读取和初始化，业务服务只保留 JWT、TTL、权限等业务配置。服务会先读取 `LOOP_CONFIG_FILE` 指向的 TOML 文件，再用环境变量或 `*_FILE` secret 文件覆盖关键字段。`loop-event-svc` 当前编译启用了 `mail` 和 `storage` infra feature，因此邮件和 S3 的非敏感配置必须存在，敏感凭证必须通过 Secret 注入。
+后端不依赖配置中心，部署到 K8s 时使用 `ConfigMap` 管理普通配置，使用 `Secret` 管理敏感配置。启动时基础设施配置由 `loop-infra` 统一读取和初始化，业务服务只保留 JWT、TTL、权限等业务配置。服务会先读取 `LOOP_CONFIG_FILE` 指向的 TOML 文件，再用环境变量或 `*_FILE` secret 文件覆盖关键字段。`loop-api-svc` 当前编译启用了 `mail` 和 `storage` infra feature，因此邮件和 S3 的非敏感配置必须存在，敏感凭证必须通过 Secret 注入。
 
 推荐挂载方式：
 
 ```text
-ConfigMap -> /etc/loop/config/loop-event-svc.toml
+ConfigMap -> /etc/loop/config/loop-api-svc.toml
 Secret    -> /etc/loop/secrets/*
 ```
 

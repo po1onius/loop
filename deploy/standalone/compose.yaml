@@ -1,12 +1,12 @@
 name: loop-standalone
 
 services:
-  event-svc:
-    container_name: loop-event-svc
+  api-svc:
+    container_name: loop-api-svc
     build:
       context: ../..
-      dockerfile: srv/loop-event-svc/Dockerfile
-    image: loop-event-svc:standalone
+      dockerfile: srv/loop-api-svc/Dockerfile
+    image: loop-api-svc:standalone
     # 单机环境直接 bind mount 本地 secret 文件，私钥通常是 0600。
     # rootless Podman 下容器 root 会映射到宿主机当前用户，能读取这些本地文件。
     user: "0"
@@ -28,12 +28,12 @@ services:
       LOOP_S3_ACCESS_KEY_ID: ${LOOP_S3_ACCESS_KEY_ID:?missing LOOP_S3_ACCESS_KEY_ID}
       LOOP_S3_SECRET_ACCESS_KEY: ${LOOP_S3_SECRET_ACCESS_KEY:?missing LOOP_S3_SECRET_ACCESS_KEY}
     volumes:
-      - "${LOOP_HOST_CONFIG_FILE:?missing LOOP_HOST_CONFIG_FILE}:/etc/loop/config/loop-event-svc.toml:ro"
+      - "${LOOP_HOST_CONFIG_FILE:?missing LOOP_HOST_CONFIG_FILE}:/etc/loop/config/loop-api-svc.toml:ro"
       - "${LOOP_HOST_SECRETS_DIR:?missing LOOP_HOST_SECRETS_DIR}/jwt_private.pem:/etc/loop/secrets/jwt_private.pem:ro"
       - "${LOOP_HOST_SECRETS_DIR:?missing LOOP_HOST_SECRETS_DIR}/jwt_public.pem:/etc/loop/secrets/jwt_public.pem:ro"
       - "${LOOP_HOST_LOG_DIR:-../../srv/log}:/app/log"
     ports:
-      - "${LOOP_EVENT_SVC_PORT:-3000}:3000"
+      - "${LOOP_API_SVC_PORT:-3000}:3000"
     depends_on:
       - db
       - cache

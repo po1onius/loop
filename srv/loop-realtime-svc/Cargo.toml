@@ -1,5 +1,5 @@
 [package]
-name = "loop-im-svc"
+name = "loop-realtime-svc"
 version.workspace = true
 edition.workspace = true
 

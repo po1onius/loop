@@ -3,7 +3,7 @@ WORKDIR /app
 COPY loop-dto ./loop-dto
 COPY srv ./srv
 WORKDIR /app/srv
-RUN cargo build --release --package loop-event-svc
+RUN cargo build --release --package loop-api-svc
 
 FROM docker.io/debian:bookworm-slim AS runtime
 RUN apt-get update \
@@ -16,10 +16,10 @@ RUN groupadd --system loop \
     && mkdir -p /app/static/templates /app/log /etc/loop/config /etc/loop/secrets \
     && chown -R loop:loop /app /etc/loop
 
-COPY --from=builder /app/srv/target/release/loop-event-svc /usr/local/bin/loop-event-svc
+COPY --from=builder /app/srv/target/release/loop-api-svc /usr/local/bin/loop-api-svc
 COPY --chown=loop:loop srv/static/templates /app/static/templates
 
-ENV LOOP_CONFIG_FILE=/etc/loop/config/loop-event-svc.toml \
+ENV LOOP_CONFIG_FILE=/etc/loop/config/loop-api-svc.toml \
     LOOP_HTTP_ADDR=0.0.0.0:3000 \
     LOOP_LOG_DIR=/app/log \
     LOOP_EMAIL_TEMPLATE_GLOB=/app/static/templates/**/* \
@@ -29,4 +29,4 @@ ENV LOOP_CONFIG_FILE=/etc/loop/config/loop-event-svc.toml \
 
 EXPOSE 3000
 USER loop
-ENTRYPOINT ["/usr/local/bin/loop-event-svc"]
+ENTRYPOINT ["/usr/local/bin/loop-api-svc"]
