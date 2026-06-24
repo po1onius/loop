@@ -41,6 +41,7 @@ type NativeDateTimePickerMode = "date" | "time" | "datetime";
 
 type EditorMessage =
   | { type: "ready" }
+  | { type: "dirty" }
   | { type: "pick_image" }
   | {
       type: "content";
@@ -677,6 +678,12 @@ export default function CreateEventScreen() {
     );
   }, []);
 
+  const blurEditor = useCallback(() => {
+    webViewRef.current?.injectJavaScript(
+      "window.loopEditor?.blurEditor?.(); true;",
+    );
+  }, []);
+
   useEffect(() => {
     if (!editorReady) {
       return;
@@ -820,6 +827,11 @@ export default function CreateEventScreen() {
         return;
       }
 
+      if (message.type === "dirty") {
+        scheduleAutosave();
+        return;
+      }
+
       if (message.type === "pick_image") {
         void handlePickImages();
         return;
@@ -856,7 +868,25 @@ export default function CreateEventScreen() {
         setError(e instanceof Error ? e.message : "草稿保存失败");
       });
     },
-    [handlePickImages, publishDoc, saveDraft],
+    [handlePickImages, publishDoc, saveDraft, scheduleAutosave],
+  );
+
+  const handleTabChange = useCallback(
+    (nextTab: CreateEventTab) => {
+      if (nextTab === activeTab) {
+        return;
+      }
+
+      if (activeTab === "content") {
+        // 离开正文页时主动导出一次，避免最新输入只停留在 WebView 内存里。
+        requestEditorExport("autosave");
+        blurEditor();
+        Keyboard.dismiss();
+      }
+
+      setActiveTab(nextTab);
+    },
+    [activeTab, blurEditor, requestEditorExport],
   );
 
   const handleSubmit = useCallback(() => {
@@ -935,22 +965,28 @@ export default function CreateEventScreen() {
             <CreateEventTabButton
               active={activeTab === "meta"}
               label="信息"
-              onPress={() => setActiveTab("meta")}
+              onPress={() => handleTabChange("meta")}
             />
             <CreateEventTabButton
               active={activeTab === "content"}
               label="正文"
-              onPress={() => setActiveTab("content")}
+              onPress={() => handleTabChange("content")}
             />
           </View>
 
           <View style={styles.tabBody}>
             <ScrollView
               keyboardShouldPersistTaps="handled"
+              pointerEvents={activeTab === "meta" ? "auto" : "none"}
+              accessibilityElementsHidden={activeTab !== "meta"}
+              importantForAccessibility={
+                activeTab === "meta" ? "auto" : "no-hide-descendants"
+              }
               showsVerticalScrollIndicator={false}
               style={[
+                styles.tabPane,
                 styles.metaScroll,
-                activeTab !== "meta" ? styles.hiddenTab : undefined,
+                activeTab !== "meta" ? styles.inactiveTabPane : undefined,
               ]}
               contentContainerStyle={styles.metaContent}
             >
@@ -1012,13 +1048,19 @@ export default function CreateEventScreen() {
             </ScrollView>
 
             <View
+              pointerEvents={activeTab === "content" ? "auto" : "none"}
+              accessibilityElementsHidden={activeTab !== "content"}
+              importantForAccessibility={
+                activeTab === "content" ? "auto" : "no-hide-descendants"
+              }
               style={[
+                styles.tabPane,
                 styles.editorFrame,
                 {
                   backgroundColor: editorBackground,
                   borderColor: editorBorderColor,
                 },
-                activeTab !== "content" ? styles.hiddenTab : undefined,
+                activeTab !== "content" ? styles.inactiveTabPane : undefined,
               ]}
             >
               <WebView
@@ -1281,7 +1323,11 @@ function parseEditorMessage(raw: string): EditorMessage | null {
 
     const message = value as Record<string, unknown>;
     const messageType = message["type"];
-    if (messageType === "ready" || messageType === "pick_image") {
+    if (
+      messageType === "ready" ||
+      messageType === "dirty" ||
+      messageType === "pick_image"
+    ) {
       return { type: messageType };
     }
     if (messageType === "log" && typeof message["message"] === "string") {
@@ -1515,9 +1561,13 @@ const styles = StyleSheet.create({
   tabBody: {
     flex: 1,
     minHeight: 0,
+    position: "relative",
   },
-  hiddenTab: {
-    display: "none",
+  tabPane: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  inactiveTabPane: {
+    opacity: 0,
   },
   metaScroll: {
     flex: 1,
