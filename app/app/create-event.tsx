@@ -3,6 +3,7 @@ import * as ImagePicker from "expo-image-picker";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Keyboard,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -15,7 +16,7 @@ import {
 import DateTimePicker, {
   type DateTimePickerEvent,
 } from "@react-native-community/datetimepicker";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import WebView, { type WebViewMessageEvent } from "react-native-webview";
 
 import { ThemedText } from "@/components/themed-text";
@@ -91,6 +92,7 @@ const EVENT_CONTENT_VERSION = 1;
 const AUTOSAVE_DEBOUNCE_MS = 1500;
 const AUTOSAVE_INTERVAL_MS = 15000;
 const EVENT_TIME_MINUTE_INTERVAL = 5;
+const EDITOR_KEYBOARD_EXTRA_BOTTOM_INSET = 64;
 const IOS_PICKER_TEXT_COLOR = "#11181C";
 const IOS_PICKER_ACCENT_COLOR = "#0A7EA4";
 const IOS_PICKER_LOCALE = "zh-Hans-CN";
@@ -98,7 +100,16 @@ const MAX_EDITOR_PREVIEW_DATA_URI_CHARS = 4_000_000;
 
 export default function CreateEventScreen() {
   // 背景铺到 SafeArea/KeyboardAvoidingView，避免状态栏和键盘圆角露出底层原生背景。
+  const safeAreaInsets = useSafeAreaInsets();
   const screenBackground = useThemeColor({}, "background");
+  const editorBackground = useThemeColor(
+    { light: "#FFFFFF", dark: "#151718" },
+    "background",
+  );
+  const editorBorderColor = useThemeColor(
+    { light: "#D9E0EA", dark: "#2F3A45" },
+    "background",
+  );
   const webViewRef = useRef<WebView>(null);
   const pendingRequestIdRef = useRef<string | null>(null);
   const pendingExportPurposeRef = useRef<ExportPurpose | null>(null);
@@ -114,7 +125,6 @@ export default function CreateEventScreen() {
   const draftHasMeaningfulContentRef = useRef(false);
   const publishedRef = useRef(false);
   const [editorReady, setEditorReady] = useState(false);
-  const [draftEventId, setDraftEventId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<CreateEventTab>("meta");
   const [title, setTitle] = useState("");
   const [startAt, setStartAt] = useState<Date | null>(null);
@@ -132,6 +142,7 @@ export default function CreateEventScreen() {
   const [tagText, setTagText] = useState("");
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
+  const [editorKeyboardInset, setEditorKeyboardInset] = useState(0);
   const [uploadingImage, setUploadingImage] = useState(false);
   const [savingDraft, setSavingDraft] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -162,11 +173,14 @@ export default function CreateEventScreen() {
   }, []);
 
   const busy = uploadingImage || submitting || savingDraft;
+  const bottomSafeGap = Math.max(safeAreaInsets.bottom, 8);
   const statusMessage = error
     ? error
     : savingDraft
       ? "正在保存草稿..."
-      : status || (draftEventId ? `草稿 ${draftEventId} 已就绪` : "");
+      : status;
+  const headerStatusMessage = statusMessage || "支持图文排版，草稿会自动保存";
+  const showHeaderStatusSpinner = Boolean(statusMessage) && busy;
   const canSubmit = useMemo(
     () => editorReady && title.trim().length > 0 && !busy,
     [busy, editorReady, title],
@@ -382,7 +396,6 @@ export default function CreateEventScreen() {
         .then((draft) => {
           draftEventIdRef.current = draft.event_id;
           if (mountedRef.current) {
-            setDraftEventId(draft.event_id);
             setError("");
             setStatus("草稿已创建");
           }
@@ -456,7 +469,6 @@ export default function CreateEventScreen() {
           draftHasMeaningfulContentRef.current = true;
         }
         const saved = await updateEventDraft(eventId, req);
-        setDraftEventId(saved.event_id);
         draftEventIdRef.current = saved.event_id;
         savedContentSignatureRef.current = signature;
         draftHasMeaningfulContentRef.current = hasMeaningfulContent;
@@ -622,6 +634,24 @@ export default function CreateEventScreen() {
     };
   }, [editorReady, requestEditorExport]);
 
+  useEffect(() => {
+    if (Platform.OS !== "ios") {
+      return;
+    }
+
+    const showSub = Keyboard.addListener("keyboardWillShow", () => {
+      setEditorKeyboardInset(EDITOR_KEYBOARD_EXTRA_BOTTOM_INSET);
+    });
+    const hideSub = Keyboard.addListener("keyboardWillHide", () => {
+      setEditorKeyboardInset(0);
+    });
+
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
+
   const injectLocalImage = useCallback((payload: LocalImagePayload) => {
     webViewRef.current?.injectJavaScript(
       `window.loopEditor?.insertLocalImage(${JSON.stringify(payload)}); true;`,
@@ -639,6 +669,20 @@ export default function CreateEventScreen() {
       `window.loopEditor?.markImageUploadFailed(${JSON.stringify(payload)}); true;`,
     );
   }, []);
+
+  const updateEditorViewportInsets = useCallback((bottom: number) => {
+    const safeBottom = Math.max(0, Math.round(bottom));
+    webViewRef.current?.injectJavaScript(
+      `window.loopEditor?.setViewportInsets({ bottom: ${safeBottom} }); true;`,
+    );
+  }, []);
+
+  useEffect(() => {
+    if (!editorReady) {
+      return;
+    }
+    updateEditorViewportInsets(editorKeyboardInset);
+  }, [editorKeyboardInset, editorReady, updateEditorViewportInsets]);
 
   const handlePickImages = useCallback(async () => {
     if (busy || draftWorkCountRef.current > 0) {
@@ -773,7 +817,6 @@ export default function CreateEventScreen() {
 
       if (message.type === "ready") {
         setEditorReady(true);
-        setStatus("编辑器已就绪");
         return;
       }
 
@@ -859,9 +902,17 @@ export default function CreateEventScreen() {
             </Pressable>
             <View style={styles.headerTitleWrap}>
               <ThemedText type="subtitle">创建活动</ThemedText>
-              <ThemedText style={styles.headerMeta}>
-                富文本正文会按后端内容块结构发布
-              </ThemedText>
+              <View style={styles.headerMetaRow}>
+                {showHeaderStatusSpinner ? (
+                  <ActivityIndicator size="small" color="#0A7EA4" />
+                ) : null}
+                <ThemedText
+                  numberOfLines={1}
+                  style={[styles.headerMeta, error ? styles.errorText : undefined]}
+                >
+                  {headerStatusMessage}
+                </ThemedText>
+              </View>
             </View>
             <Pressable
               accessibilityRole="button"
@@ -963,19 +1014,28 @@ export default function CreateEventScreen() {
             <View
               style={[
                 styles.editorFrame,
+                {
+                  backgroundColor: editorBackground,
+                  borderColor: editorBorderColor,
+                },
                 activeTab !== "content" ? styles.hiddenTab : undefined,
               ]}
             >
               <WebView
                 ref={webViewRef}
                 source={{ html: EVENT_RICH_EDITOR_HTML }}
-                style={styles.webView}
+                style={[styles.webView, { backgroundColor: editorBackground }]}
+                containerStyle={{ backgroundColor: editorBackground }}
                 originWhitelist={["*"]}
                 javaScriptEnabled
                 domStorageEnabled
                 allowFileAccess
                 allowFileAccessFromFileURLs
                 keyboardDisplayRequiresUserAction={false}
+                hideKeyboardAccessoryView
+                automaticallyAdjustContentInsets={false}
+                contentInsetAdjustmentBehavior="never"
+                bounces={false}
                 setSupportMultipleWindows={false}
                 onMessage={handleEditorMessage}
                 onError={(event) => {
@@ -986,18 +1046,9 @@ export default function CreateEventScreen() {
             </View>
           </View>
 
-          {statusMessage || uploadingImage ? (
-            <View style={styles.statusBar}>
-              {busy || savingDraft ? (
-                <ActivityIndicator size="small" color="#0A7EA4" />
-              ) : null}
-              <ThemedText
-                style={[styles.statusText, error ? styles.errorText : undefined]}
-              >
-                {statusMessage}
-              </ThemedText>
-            </View>
-          ) : null}
+          {/* 正文编辑器在部分圆角屏设备上会贴近物理屏幕底部。
+              这里保留稳定的底部缓冲，避免编辑器下方圆角被屏幕圆角裁掉。 */}
+          <View style={[styles.bottomSafeGap, { height: bottomSafeGap }]} />
 
           {nativeDateTimePicker}
           {iosDateTimePicker}
@@ -1404,8 +1455,15 @@ const styles = StyleSheet.create({
   headerTitleWrap: {
     flex: 1,
   },
+  headerMetaRow: {
+    minHeight: 18,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
   headerMeta: {
     marginTop: 2,
+    flex: 1,
     fontSize: 12,
     lineHeight: 16,
     opacity: 0.62,
@@ -1545,22 +1603,12 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "transparent",
   },
-  statusBar: {
-    minHeight: 34,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    paddingHorizontal: 4,
-  },
-  statusText: {
-    flex: 1,
-    fontSize: 13,
-    lineHeight: 18,
-    opacity: 0.72,
-  },
   errorText: {
     color: "#D64545",
     opacity: 1,
+  },
+  bottomSafeGap: {
+    height: 8,
   },
   modalBackdrop: {
     flex: 1,

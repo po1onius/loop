@@ -29,6 +29,7 @@ const html = `<!doctype html>
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
+    <meta name="color-scheme" content="light dark" />
     <meta
       name="viewport"
       content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no"
@@ -46,6 +47,7 @@ const html = `<!doctype html>
         --image-check-a: #eef2f6;
         --image-check-b: #ffffff;
         --danger: #c2410c;
+        --keyboard-inset: 0px;
       }
 
       @media (prefers-color-scheme: dark) {
@@ -137,7 +139,7 @@ const html = `<!doctype html>
 
       .tiptap {
         min-height: 100%;
-        padding: 16px 14px 42px;
+        padding: 16px 14px calc(42px + var(--keyboard-inset));
         outline: none;
         -webkit-user-select: text;
         user-select: text;

@@ -51,6 +51,10 @@ type FailedImagePayload = {
   reason?: string;
 };
 
+type ViewportInsetsPayload = {
+  bottom?: number;
+};
+
 type ImageNodeMatch = {
   attrs: Record<string, unknown>;
   pos: number;
@@ -82,6 +86,7 @@ declare global {
       insertUploadedImage: (payload: UploadedImagePayload) => void;
       updateUploadedImage: (payload: UploadedImagePayload) => void;
       markImageUploadFailed: (payload: FailedImagePayload) => void;
+      setViewportInsets: (payload: ViewportInsetsPayload) => void;
     };
   }
 }
@@ -521,6 +526,12 @@ function exportContent(requestId: string) {
   }
 }
 
+function setViewportInsets(payload: ViewportInsetsPayload) {
+  const bottom = Math.max(0, Math.min(240, Number(payload.bottom) || 0));
+  document.documentElement.style.setProperty("--keyboard-inset", `${bottom}px`);
+  editor?.commands.scrollIntoView();
+}
+
 function assignMissingBlockIds(currentEditor: Editor) {
   let tr = currentEditor.state.tr;
   currentEditor.state.doc.forEach((node, offset) => {
@@ -730,4 +741,5 @@ window.loopEditor = {
   insertUploadedImage,
   updateUploadedImage,
   markImageUploadFailed,
+  setViewportInsets,
 };
