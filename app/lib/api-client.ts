@@ -89,6 +89,7 @@ function parseJsonResponse<TResp>(text: string): TResp {
 export type RequestJsonOptions<TReq> = {
   method?: "GET" | "POST" | "PATCH" | "DELETE";
   body?: TReq;
+  headers?: Record<string, string>;
   auth?: boolean;
 };
 
@@ -96,9 +97,9 @@ export async function requestJson<TReq, TResp>(
   path: string,
   options: RequestJsonOptions<TReq> = {},
 ): Promise<TResp> {
-  const { method = "GET", body, auth = false } = options;
+  const { method = "GET", body, headers: extraHeaders = {}, auth = false } = options;
   const apiBaseUrl = requireApiBaseUrl();
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = { ...extraHeaders };
 
   if (body !== undefined) {
     headers["Content-Type"] = "application/json";

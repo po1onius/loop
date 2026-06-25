@@ -286,6 +286,53 @@ impl Event {
     }
 
     #[tracing::instrument(
+        name = "db.event.select_owned_draft",
+        skip(conn),
+        fields(
+            db.system = "postgresql",
+            db.operation = "select",
+            db.table = "events",
+            user.id = owner_id,
+        )
+    )]
+    pub async fn select_owned_draft(
+        owner_id: i64,
+        conn: &mut DieselConn,
+    ) -> Result<Option<Self>, diesel::result::Error> {
+        events::table
+            .filter(events::creator_id.eq(owner_id))
+            .filter(events::status.eq("draft"))
+            .select(Self::as_select())
+            .first::<Self>(conn)
+            .await
+            .optional()
+    }
+
+    #[tracing::instrument(
+        name = "db.event.select_owned_draft_for_update_by_owner",
+        skip(conn),
+        fields(
+            db.system = "postgresql",
+            db.operation = "select_for_update",
+            db.table = "events",
+            user.id = owner_id,
+        )
+    )]
+    pub async fn select_owned_draft_for_update_by_owner(
+        owner_id: i64,
+        conn: &mut DieselConn,
+    ) -> Result<Option<Self>, diesel::result::Error> {
+        events::table
+            .filter(events::creator_id.eq(owner_id))
+            .filter(events::status.eq("draft"))
+            .select(Self::as_select())
+            .for_update()
+            .first::<Self>(conn)
+            .await
+            .optional()
+    }
+
+    #[tracing::instrument(
         name = "db.event.select_owned_draft_for_update",
         skip(conn),
         fields(

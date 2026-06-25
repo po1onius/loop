@@ -6,6 +6,12 @@ export type CreateEventDraftRequest = { title: string | null, content: EventCont
 
 export type UpdateEventDraftRequest = { title: string, content: EventContentDoc, start_at: string | null, end_at: string | null, location_name: string | null, location_address: string | null, capacity: number | null, tags: Array<string>, };
 
+export type OpenEventDraftRequest = { draft_session_id: string, };
+
+export type OpenEventDraftResp = { draft_session_id: string, lease_expires_in: number, event: EventResp, };
+
+export type RefreshEventDraftLeaseRequest = { draft_session_id: string, };
+
 export type CreateMediaUploadRequest = { mime_type: string, byte_size: number, width: number | null, height: number | null, };
 
 export type CreateMediaUploadResp = { asset_id: string, storage_key: string, upload_method: string, upload_url: string, upload_headers: Array<PresignedHeader>, expires_in: number, public_url: string | null, };

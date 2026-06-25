@@ -1,5 +1,5 @@
 use crate::{
-    db_conn,
+    db_conn, redis_conn,
     http::{AppRoutes, AuthInfo, HttpErr, ResultExt, err_key::*},
 };
 use axum::{
@@ -9,19 +9,25 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use diesel_async::AsyncConnection;
-use http::{Method, StatusCode};
+use http::{HeaderMap, Method, StatusCode};
 use loop_dto::{
     CreateEventDraftRequest, CreateEventRequest, EVENT_CONTENT_VERSION_V1, EventContentBlock,
     EventContentDoc, EventContentImage, EventFeatureBlock, EventInlineNode, EventResp, EventStatus,
-    EventTextMark, ListEventsResp, UpdateEventDraftRequest,
+    EventTextMark, ListEventsResp, OpenEventDraftRequest, OpenEventDraftResp,
+    RefreshEventDraftLeaseRequest, UpdateEventDraftRequest,
 };
-use loop_svc_model::event::{
-    Event, EventDraftChanges, MediaAsset, NewEvent, PublishEventDraftChanges,
+use loop_svc_model::{
+    DieselConn,
+    event::{Event, EventDraftChanges, MediaAsset, NewEvent, PublishEventDraftChanges},
 };
-use serde::Deserialize;
+use redis::AsyncCommands;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 const EVENT_CREATE_PERMISSION: &str = "event.create";
+const DRAFT_SESSION_HEADER: &str = "x-draft-session-id";
+const DRAFT_LOCK_TTL_SECONDS: i32 = 60;
+const DRAFT_LOCK_TTL_MILLIS: i64 = (DRAFT_LOCK_TTL_SECONDS as i64) * 1000;
 const DEFAULT_LIST_LIMIT: i32 = 20;
 const MAX_LIST_LIMIT: i32 = 50;
 const MAX_TITLE_CHARS: usize = 80;
@@ -36,6 +42,9 @@ const MAX_FEATURE_TEXT_CHARS: usize = 200;
 const MAX_TAGS: usize = 10;
 const MAX_TAG_CHARS: usize = 20;
 const MAX_SUMMARY_CHARS: usize = 120;
+const MAX_DRAFT_SESSION_ID_CHARS: usize = 128;
+const DRAFT_LOCKED_MESSAGE: &str = "其他设备正在编辑草稿";
+const DRAFT_SESSION_EXPIRED_MESSAGE: &str = "草稿编辑会话已过期，请重新打开草稿";
 
 #[derive(Debug, Deserialize)]
 pub struct ListEventsQuery {
@@ -70,6 +79,12 @@ struct NormalizedEventDraft {
     capacity: Option<i32>,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+struct DraftEditLockValue {
+    user_id: i64,
+    session_id: String,
+}
+
 #[tracing::instrument(
     name = "event.create",
     skip_all,
@@ -95,6 +110,190 @@ pub async fn create_event(
 }
 
 #[tracing::instrument(
+    name = "event.draft.open",
+    skip_all,
+    fields(user.id = auth.user_id)
+)]
+pub async fn open_event_draft(
+    State(_state): State<crate::http::AppState>,
+    auth: AuthInfo,
+    Json(req): Json<OpenEventDraftRequest>,
+) -> Result<Json<OpenEventDraftResp>, HttpErr> {
+    let session_id = normalize_draft_session_id(&req.draft_session_id)?;
+    acquire_draft_edit_lock(auth.user_id, &session_id).await?;
+
+    let mut conn = db_conn!();
+    let event_result = conn
+        .transaction::<Event, HttpErr, _>(async |conn| {
+            if let Some(event) = Event::select_owned_draft_for_update_by_owner(auth.user_id, conn)
+                .await
+                .internal(DB_ERROR)?
+            {
+                return Ok(event);
+            }
+            insert_empty_event_draft_with_conn(auth.user_id, conn).await
+        })
+        .await;
+    let event = match event_result {
+        Ok(event) => event,
+        Err(err) => {
+            release_draft_edit_lock_best_effort(auth.user_id, &session_id).await;
+            return Err(err);
+        }
+    };
+
+    tracing::info!(
+        event = "event.draft_opened",
+        event_id = event.event_id,
+        user_id = auth.user_id,
+        draft_session_id = %session_id,
+        lease_expires_in = DRAFT_LOCK_TTL_SECONDS,
+        "event draft opened with edit lease"
+    );
+
+    Ok(Json(OpenEventDraftResp {
+        draft_session_id: session_id,
+        lease_expires_in: DRAFT_LOCK_TTL_SECONDS,
+        event: to_event_resp(event)?,
+    }))
+}
+
+#[tracing::instrument(
+    name = "event.draft.lease.refresh",
+    skip_all,
+    fields(user.id = auth.user_id)
+)]
+pub async fn refresh_event_draft_lease(
+    State(_state): State<crate::http::AppState>,
+    auth: AuthInfo,
+    Json(req): Json<RefreshEventDraftLeaseRequest>,
+) -> Result<(), HttpErr> {
+    let session_id = normalize_draft_session_id(&req.draft_session_id)?;
+    refresh_owned_draft_edit_lock(auth.user_id, &session_id).await?;
+    tracing::info!(
+        event = "event.draft_lease_refreshed",
+        user_id = auth.user_id,
+        draft_session_id = %session_id,
+        lease_expires_in = DRAFT_LOCK_TTL_SECONDS,
+        "event draft edit lease refreshed"
+    );
+    Ok(())
+}
+
+#[tracing::instrument(
+    name = "event.draft.lease.release",
+    skip_all,
+    fields(user.id = auth.user_id)
+)]
+pub async fn release_event_draft_lease(
+    State(_state): State<crate::http::AppState>,
+    auth: AuthInfo,
+    Json(req): Json<RefreshEventDraftLeaseRequest>,
+) -> Result<(), HttpErr> {
+    let session_id = normalize_draft_session_id(&req.draft_session_id)?;
+    release_draft_edit_lock_best_effort(auth.user_id, &session_id).await;
+    tracing::info!(
+        event = "event.draft_lease_released",
+        user_id = auth.user_id,
+        draft_session_id = %session_id,
+        "event draft edit lease released"
+    );
+    Ok(())
+}
+
+#[tracing::instrument(
+    name = "event.draft.update_current",
+    skip_all,
+    fields(user.id = auth.user_id)
+)]
+pub async fn update_current_event_draft(
+    State(_state): State<crate::http::AppState>,
+    auth: AuthInfo,
+    headers: HeaderMap,
+    Json(req): Json<UpdateEventDraftRequest>,
+) -> Result<Json<EventResp>, HttpErr> {
+    let session_id = draft_session_id_from_headers(&headers)?;
+    refresh_owned_draft_edit_lock(auth.user_id, &session_id).await?;
+    let event = update_current_event_draft_inner(auth.user_id, req).await?;
+    tracing::info!(
+        event = "event.current_draft_updated",
+        event_id = event.event_id,
+        user_id = auth.user_id,
+        draft_session_id = %session_id,
+        "current event draft updated"
+    );
+
+    Ok(Json(to_event_resp(event)?))
+}
+
+#[tracing::instrument(
+    name = "event.draft.publish_current",
+    skip_all,
+    fields(user.id = auth.user_id)
+)]
+pub async fn publish_current_event_draft(
+    State(_state): State<crate::http::AppState>,
+    auth: AuthInfo,
+    headers: HeaderMap,
+) -> Result<Json<EventResp>, HttpErr> {
+    let session_id = draft_session_id_from_headers(&headers)?;
+    refresh_owned_draft_edit_lock(auth.user_id, &session_id).await?;
+    let mut conn = db_conn!();
+    let event = conn
+        .transaction::<Event, HttpErr, _>(async |conn| {
+            let event = Event::select_owned_draft_for_update_by_owner(auth.user_id, conn)
+                .await
+                .internal(DB_ERROR)?
+                .ok_or_else(|| HttpErr::client(StatusCode::NOT_FOUND, EVENT_NOT_FOUND))?;
+            publish_locked_event_draft(auth.user_id, event, conn).await
+        })
+        .await?;
+    release_draft_edit_lock_best_effort(auth.user_id, &session_id).await;
+    tracing::info!(
+        event = "event.current_draft_published",
+        event_id = event.event_id,
+        user_id = auth.user_id,
+        draft_session_id = %session_id,
+        "current event draft published"
+    );
+
+    Ok(Json(to_event_resp(event)?))
+}
+
+#[tracing::instrument(
+    name = "event.draft.delete_current",
+    skip_all,
+    fields(user.id = auth.user_id)
+)]
+pub async fn delete_current_event_draft(
+    State(_state): State<crate::http::AppState>,
+    auth: AuthInfo,
+    headers: HeaderMap,
+) -> Result<(), HttpErr> {
+    let session_id = draft_session_id_from_headers(&headers)?;
+    refresh_owned_draft_edit_lock(auth.user_id, &session_id).await?;
+    let draft = Event::select_owned_draft(auth.user_id, &mut db_conn!())
+        .await
+        .internal(DB_ERROR)?
+        .ok_or_else(|| HttpErr::client(StatusCode::NOT_FOUND, EVENT_NOT_FOUND))?;
+    let affected = Event::delete_draft(draft.event_id, auth.user_id, &mut db_conn!())
+        .await
+        .internal(DB_ERROR)?;
+    if affected == 0 {
+        return Err(HttpErr::client(StatusCode::NOT_FOUND, EVENT_NOT_FOUND));
+    }
+    release_draft_edit_lock_best_effort(auth.user_id, &session_id).await;
+    tracing::info!(
+        event = "event.current_draft_deleted",
+        event_id = draft.event_id,
+        user_id = auth.user_id,
+        draft_session_id = %session_id,
+        "current event draft deleted"
+    );
+    Ok(())
+}
+
+#[tracing::instrument(
     name = "event.draft.create",
     skip_all,
     fields(user.id = auth.user_id, event.id = tracing::field::Empty)
@@ -102,8 +301,11 @@ pub async fn create_event(
 pub async fn create_event_draft(
     State(_state): State<crate::http::AppState>,
     auth: AuthInfo,
+    headers: HeaderMap,
     Json(req): Json<CreateEventDraftRequest>,
 ) -> Result<(StatusCode, Json<EventResp>), HttpErr> {
+    let session_id = draft_session_id_from_headers(&headers)?;
+    refresh_owned_draft_edit_lock(auth.user_id, &session_id).await?;
     let draft = normalize_draft_create_payload(req)?;
     validate_referenced_media_assets(auth.user_id, &draft.asset_ids).await?;
     let event = insert_event(auth.user_id, "draft", draft, None).await?;
@@ -112,6 +314,7 @@ pub async fn create_event_draft(
         event = "event.draft_created",
         event_id = event.event_id,
         user_id = auth.user_id,
+        draft_session_id = %session_id,
         "event draft created"
     );
 
@@ -126,10 +329,13 @@ pub async fn create_event_draft(
 pub async fn update_event_draft(
     State(_state): State<crate::http::AppState>,
     auth: AuthInfo,
+    headers: HeaderMap,
     Path(event_id): Path<String>,
     Json(req): Json<UpdateEventDraftRequest>,
 ) -> Result<Json<EventResp>, HttpErr> {
     let event_id = parse_event_id(&event_id)?;
+    let session_id = draft_session_id_from_headers(&headers)?;
+    refresh_owned_draft_edit_lock(auth.user_id, &session_id).await?;
     let draft = normalize_draft_update_payload(req)?;
     validate_referenced_media_assets(auth.user_id, &draft.asset_ids).await?;
     let changes = to_draft_changes(draft)?;
@@ -140,6 +346,7 @@ pub async fn update_event_draft(
         event = "event.draft_updated",
         event_id = event.event_id,
         user_id = auth.user_id,
+        draft_session_id = %session_id,
         "event draft updated"
     );
 
@@ -154,9 +361,12 @@ pub async fn update_event_draft(
 pub async fn publish_event_draft(
     State(_state): State<crate::http::AppState>,
     auth: AuthInfo,
+    headers: HeaderMap,
     Path(event_id): Path<String>,
 ) -> Result<Json<EventResp>, HttpErr> {
     let event_id = parse_event_id(&event_id)?;
+    let session_id = draft_session_id_from_headers(&headers)?;
+    refresh_owned_draft_edit_lock(auth.user_id, &session_id).await?;
     let mut conn = db_conn!();
     let event = conn
         .transaction::<Event, HttpErr, _>(async |conn| {
@@ -164,18 +374,15 @@ pub async fn publish_event_draft(
                 .await
                 .internal(DB_ERROR)?
                 .ok_or_else(|| HttpErr::client(StatusCode::NOT_FOUND, EVENT_NOT_FOUND))?;
-            let asset_ids = collect_image_asset_ids(&parse_stored_content(&event)?);
-            validate_referenced_media_assets_with_conn(auth.user_id, &asset_ids, conn).await?;
-            let publish_changes = build_publish_changes(event)?;
-            Event::publish_draft_with_changes(event_id, auth.user_id, publish_changes, conn)
-                .await
-                .map_err(map_event_mutation_error)
+            publish_locked_event_draft(auth.user_id, event, conn).await
         })
         .await?;
+    release_draft_edit_lock_best_effort(auth.user_id, &session_id).await;
     tracing::info!(
         event = "event.draft_published",
         event_id = event.event_id,
         user_id = auth.user_id,
+        draft_session_id = %session_id,
         "event draft published"
     );
 
@@ -190,19 +397,24 @@ pub async fn publish_event_draft(
 pub async fn delete_event_draft(
     State(_state): State<crate::http::AppState>,
     auth: AuthInfo,
+    headers: HeaderMap,
     Path(event_id): Path<String>,
 ) -> Result<StatusCode, HttpErr> {
     let event_id = parse_event_id(&event_id)?;
+    let session_id = draft_session_id_from_headers(&headers)?;
+    refresh_owned_draft_edit_lock(auth.user_id, &session_id).await?;
     let affected = Event::delete_draft(event_id, auth.user_id, &mut db_conn!())
         .await
         .internal(DB_ERROR)?;
     if affected == 0 {
         return Err(HttpErr::client(StatusCode::NOT_FOUND, EVENT_NOT_FOUND));
     }
+    release_owned_draft_edit_lock(auth.user_id, &session_id).await?;
     tracing::info!(
         event = "event.draft_deleted",
         event_id = event_id,
         user_id = auth.user_id,
+        draft_session_id = %session_id,
         "event draft deleted"
     );
     Ok(StatusCode::NO_CONTENT)
@@ -330,6 +542,17 @@ async fn insert_event(
     draft: NormalizedEventDraft,
     published_at: Option<DateTime<Utc>>,
 ) -> Result<Event, HttpErr> {
+    let mut conn = db_conn!();
+    insert_event_with_conn(creator_id, status, draft, published_at, &mut conn).await
+}
+
+async fn insert_event_with_conn(
+    creator_id: i64,
+    status: &str,
+    draft: NormalizedEventDraft,
+    published_at: Option<DateTime<Utc>>,
+    conn: &mut DieselConn,
+) -> Result<Event, HttpErr> {
     let event = NewEvent {
         creator_id,
         title: draft.title,
@@ -347,9 +570,54 @@ async fn insert_event(
         published_at,
     };
 
-    Event::insert(event, &mut db_conn!())
+    Event::insert(event, conn).await.internal(DB_ERROR)
+}
+
+async fn insert_empty_event_draft_with_conn(
+    creator_id: i64,
+    conn: &mut DieselConn,
+) -> Result<Event, HttpErr> {
+    let draft = normalize_draft_create_payload(CreateEventDraftRequest {
+        title: None,
+        content: None,
+        start_at: None,
+        end_at: None,
+        location_name: None,
+        location_address: None,
+        capacity: None,
+        tags: None,
+    })?;
+    insert_event_with_conn(creator_id, "draft", draft, None, conn).await
+}
+
+async fn update_current_event_draft_inner(
+    user_id: i64,
+    req: UpdateEventDraftRequest,
+) -> Result<Event, HttpErr> {
+    let draft = normalize_draft_update_payload(req)?;
+    validate_referenced_media_assets(user_id, &draft.asset_ids).await?;
+    let changes = to_draft_changes(draft)?;
+    let current = Event::select_owned_draft(user_id, &mut db_conn!())
         .await
-        .internal(DB_ERROR)
+        .internal(DB_ERROR)?
+        .ok_or_else(|| HttpErr::client(StatusCode::NOT_FOUND, EVENT_NOT_FOUND))?;
+    Event::update_draft(current.event_id, user_id, changes, &mut db_conn!())
+        .await
+        .map_err(map_event_mutation_error)
+}
+
+async fn publish_locked_event_draft(
+    user_id: i64,
+    event: Event,
+    conn: &mut DieselConn,
+) -> Result<Event, HttpErr> {
+    let event_id = event.event_id;
+    let asset_ids = collect_image_asset_ids(&parse_stored_content(&event)?);
+    validate_referenced_media_assets_with_conn(user_id, &asset_ids, conn).await?;
+    let publish_changes = build_publish_changes(event)?;
+    Event::publish_draft_with_changes(event_id, user_id, publish_changes, conn)
+        .await
+        .map_err(map_event_mutation_error)
 }
 
 fn normalize_publish_payload(req: CreateEventRequest) -> Result<NormalizedEventDraft, HttpErr> {
@@ -908,6 +1176,181 @@ fn parse_event_id(value: &str) -> Result<i64, HttpErr> {
         .map_err(|_| HttpErr::client(StatusCode::BAD_REQUEST, INVALID_INPUT))
 }
 
+fn normalize_draft_session_id(value: &str) -> Result<String, HttpErr> {
+    let session_id = value.trim();
+    if session_id.is_empty()
+        || session_id.len() > MAX_DRAFT_SESSION_ID_CHARS
+        || !session_id
+            .bytes()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, b'-' | b'_'))
+    {
+        return Err(HttpErr::client(StatusCode::BAD_REQUEST, INVALID_INPUT));
+    }
+    Ok(session_id.to_string())
+}
+
+fn draft_session_id_from_headers(headers: &HeaderMap) -> Result<String, HttpErr> {
+    let value = headers
+        .get(DRAFT_SESSION_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| {
+            HttpErr::client_msg(
+                StatusCode::CONFLICT,
+                DRAFT_SESSION_EXPIRED,
+                DRAFT_SESSION_EXPIRED_MESSAGE,
+            )
+        })?;
+    normalize_draft_session_id(value)
+}
+
+fn draft_edit_lock_key(user_id: i64) -> String {
+    format!("event:draft:edit:user:{user_id}")
+}
+
+fn draft_edit_lock_value(user_id: i64, session_id: &str) -> Result<String, HttpErr> {
+    serde_json::to_string(&DraftEditLockValue {
+        user_id,
+        session_id: session_id.to_string(),
+    })
+    .internal(REDIS_ERROR)
+}
+
+fn is_same_draft_lock_owner(stored: &str, user_id: i64, session_id: &str) -> bool {
+    serde_json::from_str::<DraftEditLockValue>(stored)
+        .map(|value| value.user_id == user_id && value.session_id == session_id)
+        .unwrap_or(false)
+}
+
+async fn acquire_draft_edit_lock(user_id: i64, session_id: &str) -> Result<(), HttpErr> {
+    let key = draft_edit_lock_key(user_id);
+    let value = draft_edit_lock_value(user_id, session_id)?;
+    let mut redis = redis_conn!();
+    let stored = redis::cmd("SET")
+        .arg(&key)
+        .arg(&value)
+        .arg("NX")
+        .arg("EX")
+        .arg(DRAFT_LOCK_TTL_SECONDS)
+        .query_async::<Option<String>>(&mut redis)
+        .await
+        .internal(REDIS_ERROR)?;
+    if stored.is_some() {
+        tracing::info!(
+            event = "event.draft_lock_acquired",
+            user_id,
+            draft_session_id = %session_id,
+            lease_expires_in = DRAFT_LOCK_TTL_SECONDS,
+            "event draft edit lock acquired"
+        );
+        return Ok(());
+    }
+
+    let current = redis
+        .get::<_, Option<String>>(&key)
+        .await
+        .internal(REDIS_ERROR)?;
+    if current
+        .as_deref()
+        .is_some_and(|stored| is_same_draft_lock_owner(stored, user_id, session_id))
+    {
+        refresh_owned_draft_edit_lock(user_id, session_id).await?;
+        tracing::info!(
+            event = "event.draft_lock_reentered",
+            user_id,
+            draft_session_id = %session_id,
+            "event draft edit lock reentered by same session"
+        );
+        return Ok(());
+    }
+
+    tracing::info!(
+        event = "event.draft_lock_conflict",
+        user_id,
+        draft_session_id = %session_id,
+        "event draft edit lock is held by another session"
+    );
+    Err(HttpErr::client_msg(
+        StatusCode::CONFLICT,
+        DRAFT_LOCKED,
+        DRAFT_LOCKED_MESSAGE,
+    ))
+}
+
+async fn refresh_owned_draft_edit_lock(user_id: i64, session_id: &str) -> Result<(), HttpErr> {
+    let key = draft_edit_lock_key(user_id);
+    let value = draft_edit_lock_value(user_id, session_id)?;
+    let mut redis = redis_conn!();
+    // 续租必须比较 owner 后再改 TTL，避免锁刚过期后误续别的设备新拿到的锁。
+    let refreshed = redis::cmd("EVAL")
+        .arg(
+            r#"if redis.call("GET", KEYS[1]) == ARGV[1] then return redis.call("PEXPIRE", KEYS[1], ARGV[2]) else return 0 end"#,
+        )
+        .arg(1)
+        .arg(&key)
+        .arg(&value)
+        .arg(DRAFT_LOCK_TTL_MILLIS)
+        .query_async::<i32>(&mut redis)
+        .await
+        .internal(REDIS_ERROR)?;
+    if refreshed == 1 {
+        return Ok(());
+    }
+
+    let current = redis
+        .get::<_, Option<String>>(&key)
+        .await
+        .internal(REDIS_ERROR)?;
+    if current.is_some() {
+        return Err(HttpErr::client_msg(
+            StatusCode::CONFLICT,
+            DRAFT_LOCKED,
+            DRAFT_LOCKED_MESSAGE,
+        ));
+    }
+    Err(HttpErr::client_msg(
+        StatusCode::CONFLICT,
+        DRAFT_SESSION_EXPIRED,
+        DRAFT_SESSION_EXPIRED_MESSAGE,
+    ))
+}
+
+async fn release_owned_draft_edit_lock(user_id: i64, session_id: &str) -> Result<(), HttpErr> {
+    let key = draft_edit_lock_key(user_id);
+    let value = draft_edit_lock_value(user_id, session_id)?;
+    let mut redis = redis_conn!();
+    // 释放也必须比较 owner，避免删除其他设备在 TTL 过期后取得的新锁。
+    let deleted = redis::cmd("EVAL")
+        .arg(
+            r#"if redis.call("GET", KEYS[1]) == ARGV[1] then return redis.call("DEL", KEYS[1]) else return 0 end"#,
+        )
+        .arg(1)
+        .arg(&key)
+        .arg(&value)
+        .query_async::<i32>(&mut redis)
+        .await
+        .internal(REDIS_ERROR)?;
+    tracing::info!(
+        event = "event.draft_lock_release_result",
+        user_id,
+        draft_session_id = %session_id,
+        deleted,
+        "event draft edit lock release completed"
+    );
+    Ok(())
+}
+
+async fn release_draft_edit_lock_best_effort(user_id: i64, session_id: &str) {
+    if let Err(err) = release_owned_draft_edit_lock(user_id, session_id).await {
+        tracing::warn!(
+            event = "event.draft_lock_release_failed",
+            user_id,
+            draft_session_id = %session_id,
+            error_source = ?err,
+            "failed to release event draft edit lock after terminal operation"
+        );
+    }
+}
+
 fn parse_optional_status(value: Option<&str>) -> Result<Option<String>, HttpErr> {
     let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(None);
@@ -935,6 +1378,42 @@ pub fn route(state: crate::http::AppState) -> AppRoutes {
             "/me/events",
             EVENT_CREATE_PERMISSION,
             get(list_owned_events),
+        )
+        .protected(
+            Method::POST,
+            "/me/event-draft/open",
+            EVENT_CREATE_PERMISSION,
+            post(open_event_draft),
+        )
+        .protected(
+            Method::PATCH,
+            "/me/event-draft",
+            EVENT_CREATE_PERMISSION,
+            patch(update_current_event_draft),
+        )
+        .protected(
+            Method::POST,
+            "/me/event-draft/publish",
+            EVENT_CREATE_PERMISSION,
+            post(publish_current_event_draft),
+        )
+        .protected(
+            Method::DELETE,
+            "/me/event-draft",
+            EVENT_CREATE_PERMISSION,
+            delete(delete_current_event_draft),
+        )
+        .protected(
+            Method::POST,
+            "/me/event-draft/lease/refresh",
+            EVENT_CREATE_PERMISSION,
+            post(refresh_event_draft_lease),
+        )
+        .protected(
+            Method::DELETE,
+            "/me/event-draft/lease",
+            EVENT_CREATE_PERMISSION,
+            delete(release_event_draft_lease),
         )
         .protected(
             Method::POST,

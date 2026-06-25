@@ -5,8 +5,8 @@ use loop_dto::{
     CreateMediaUploadResp, EventContentBlock, EventContentDoc, EventContentImage,
     EventFeatureBlock, EventInlineNode, EventResp, EventStatus, EventTextColor, EventTextMark,
     ListEventsResp, LoginRequest, LoginResp, MediaAssetResp, MediaDownloadUrlResp, PresignedHeader,
-    RefreshTokenRequest, RegisterRequest, SetTokenRequest, UpdateEventDraftRequest,
-    VerifyCodeRequest, VerifyCodeResp,
+    OpenEventDraftRequest, OpenEventDraftResp, RefreshEventDraftLeaseRequest, RefreshTokenRequest,
+    RegisterRequest, SetTokenRequest, UpdateEventDraftRequest, VerifyCodeRequest, VerifyCodeResp,
 };
 use ts_rs::{Config, TS};
 
@@ -23,6 +23,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     append::<CreateEventRequest>(&cfg, &mut declarations)?;
     append::<CreateEventDraftRequest>(&cfg, &mut declarations)?;
     append::<UpdateEventDraftRequest>(&cfg, &mut declarations)?;
+    append::<OpenEventDraftRequest>(&cfg, &mut declarations)?;
+    append::<OpenEventDraftResp>(&cfg, &mut declarations)?;
+    append::<RefreshEventDraftLeaseRequest>(&cfg, &mut declarations)?;
     append::<CreateMediaUploadRequest>(&cfg, &mut declarations)?;
     append::<CreateMediaUploadResp>(&cfg, &mut declarations)?;
     append::<CompleteMediaUploadResp>(&cfg, &mut declarations)?;

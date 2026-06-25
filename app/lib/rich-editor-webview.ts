@@ -8,10 +8,13 @@ import StarterKit from "@tiptap/starter-kit";
 type EventTextMark =
   | { type: "bold" }
   | { type: "italic" }
-  | { type: "underline" };
+  | { type: "underline" }
+  | { type: "color"; value: string };
 
 type EventInlineNode =
   | { type: "text"; text: string; marks: EventTextMark[] }
+  | { type: "hashtag"; text: string; tag_id: string | null }
+  | { type: "mention"; user_id: string; label: string }
   | { type: "link"; text: string; url: string };
 
 type EventContentImage = {
@@ -26,7 +29,14 @@ type EventContentBlock =
   | { type: "paragraph"; id: string; children: EventInlineNode[] }
   | { type: "quote"; id: string; children: EventInlineNode[] }
   | { type: "image"; id: string; item: EventContentImage; caption: string | null }
-  | { type: "divider"; id: string };
+  | { type: "image_grid"; id: string; items: EventContentImage[] }
+  | { type: "divider"; id: string }
+  | { type: "feature"; id: string; feature: { title?: string; items?: string[] } };
+
+type EventContentDoc = {
+  version: number;
+  blocks: EventContentBlock[];
+};
 
 type LocalImagePayload = {
   localId: string;
@@ -63,14 +73,14 @@ type ImageNodeMatch = {
 type ProseMirrorNode = {
   type?: string;
   text?: string;
-  attrs?: Record<string, unknown> | null;
+  attrs?: Record<string, unknown>;
   marks?: ProseMirrorMark[];
   content?: ProseMirrorNode[];
 };
 
 type ProseMirrorMark = {
-  type?: string;
-  attrs?: Record<string, unknown> | null;
+  type: string;
+  attrs?: Record<string, unknown>;
 };
 
 type NativeBridge = {
@@ -82,6 +92,7 @@ declare global {
     ReactNativeWebView?: NativeBridge;
     loopEditor?: {
       exportContent: (requestId: string) => void;
+      loadContent: (doc: EventContentDoc) => void;
       insertLocalImage: (payload: LocalImagePayload) => void;
       insertUploadedImage: (payload: UploadedImagePayload) => void;
       updateUploadedImage: (payload: UploadedImagePayload) => void;
@@ -540,6 +551,25 @@ function exportContent(requestId: string) {
   }
 }
 
+function loadContent(doc: EventContentDoc) {
+  try {
+    const currentEditor = editor;
+    if (!currentEditor) {
+      throw new Error("editor is not initialized");
+    }
+    const content = toProseMirrorDoc(doc);
+    // 加载服务端草稿属于状态恢复，不应触发 dirty/autosave 消息。
+    currentEditor.commands.setContent(content, { emitUpdate: false });
+    currentEditor.commands.blur();
+    updateToolbarState();
+    log("info", "draft content loaded into editor", {
+      blockCount: doc.blocks.length,
+    });
+  } catch (error) {
+    log("error", "load editor content failed", String(error));
+  }
+}
+
 function setViewportInsets(payload: ViewportInsetsPayload) {
   const bottom = Math.max(0, Math.min(240, Number(payload.bottom) || 0));
   document.documentElement.style.setProperty("--keyboard-inset", `${bottom}px`);
@@ -564,6 +594,159 @@ function assignMissingBlockIds(currentEditor: Editor) {
   if (tr.docChanged) {
     currentEditor.view.dispatch(tr);
   }
+}
+
+function toProseMirrorDoc(doc: EventContentDoc): ProseMirrorNode {
+  const blocks = Array.isArray(doc.blocks) ? doc.blocks : [];
+  const content = blocks.flatMap((block) => toProseMirrorBlocks(block));
+  return {
+    type: "doc",
+    content: content.length ? content : [{ type: "paragraph" }],
+  };
+}
+
+function toProseMirrorBlocks(block: EventContentBlock): ProseMirrorNode[] {
+  switch (block.type) {
+    case "heading":
+      return [
+        {
+          type: "heading",
+          attrs: {
+            level: block.level === 3 ? 3 : 2,
+            eventBlockId: block.id || createBlockId(),
+          },
+          content: toProseMirrorInline(block.children),
+        },
+      ];
+    case "paragraph":
+      return [
+        {
+          type: "paragraph",
+          attrs: { eventBlockId: block.id || createBlockId() },
+          content: toProseMirrorInline(block.children),
+        },
+      ];
+    case "quote":
+      return [
+        {
+          type: "blockquote",
+          attrs: { eventBlockId: block.id || createBlockId() },
+          content: [
+            {
+              type: "paragraph",
+              content: toProseMirrorInline(block.children),
+            },
+          ],
+        },
+      ];
+    case "image":
+      return [toProseMirrorImage(block.id, block.item)];
+    case "image_grid":
+      return block.items.map((item, index) =>
+        toProseMirrorImage(`${block.id || createBlockId()}_${index}`, item),
+      );
+    case "divider":
+      return [
+        {
+          type: "horizontalRule",
+          attrs: { eventBlockId: block.id || createBlockId() },
+        },
+      ];
+    case "feature":
+      return featureToParagraphBlocks(block);
+    default:
+      return [];
+  }
+}
+
+function toProseMirrorImage(
+  eventBlockId: string,
+  image: EventContentImage,
+): ProseMirrorNode {
+  return {
+    type: "eventImage",
+    attrs: {
+      localId: "",
+      assetId: image.asset_id,
+      src: "",
+      width: Math.max(1, Number(image.width) || 1),
+      height: Math.max(1, Number(image.height) || 1),
+      alt: image.alt || "活动图片",
+      uploadState: "uploaded",
+      eventBlockId: eventBlockId || createBlockId(),
+    },
+  };
+}
+
+function featureToParagraphBlocks(block: Extract<EventContentBlock, { type: "feature" }>) {
+  const parts = [
+    typeof block.feature.title === "string" ? block.feature.title : "",
+    ...(Array.isArray(block.feature.items) ? block.feature.items : []),
+  ]
+    .map((item) => item.trim())
+    .filter(Boolean);
+  if (!parts.length) {
+    return [];
+  }
+  return [
+    {
+      type: "paragraph",
+      attrs: { eventBlockId: block.id || createBlockId() },
+      content: [{ type: "text", text: parts.join(" ") }],
+    },
+  ];
+}
+
+function toProseMirrorInline(nodes: EventInlineNode[]): ProseMirrorNode[] {
+  const result: ProseMirrorNode[] = [];
+  for (const node of nodes) {
+    if (node.type === "link") {
+      appendTextNode(result, node.text, [
+        { type: "link", attrs: { href: normalizeUrl(node.url) ?? node.url } },
+      ]);
+      continue;
+    }
+    if (node.type === "hashtag") {
+      appendTextNode(result, node.text.startsWith("#") ? node.text : `#${node.text}`, []);
+      continue;
+    }
+    if (node.type === "mention") {
+      appendTextNode(result, `@${node.label}`, []);
+      continue;
+    }
+    appendTextNode(result, node.text, marksToProseMirror(node.marks || []));
+  }
+  return result;
+}
+
+function appendTextNode(
+  result: ProseMirrorNode[],
+  text: string,
+  marks: ProseMirrorMark[],
+) {
+  const value = text.replace(/\s+/g, " ");
+  if (!value.trim()) {
+    return;
+  }
+  const node: ProseMirrorNode = { type: "text", text: value };
+  if (marks.length) {
+    node.marks = marks;
+  }
+  result.push(node);
+}
+
+function marksToProseMirror(marks: EventTextMark[]): ProseMirrorMark[] {
+  const result: ProseMirrorMark[] = [];
+  if (marks.some((mark) => mark.type === "bold")) {
+    result.push({ type: "bold" });
+  }
+  if (marks.some((mark) => mark.type === "italic")) {
+    result.push({ type: "italic" });
+  }
+  if (marks.some((mark) => mark.type === "underline")) {
+    result.push({ type: "underline" });
+  }
+  return result;
 }
 
 function toEventBlocks(doc: ProseMirrorNode): EventContentBlock[] {
@@ -755,6 +938,7 @@ function countText(blocks: EventContentBlock[]): number {
 
 window.loopEditor = {
   exportContent,
+  loadContent,
   insertLocalImage,
   insertUploadedImage,
   updateUploadedImage,

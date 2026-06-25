@@ -3,9 +3,12 @@ import type {
   CreateEventRequest,
   EventResp,
   ListEventsResp,
+  OpenEventDraftResp,
   UpdateEventDraftRequest,
 } from "@/lib/dto";
 import { requestJson } from "@/lib/api-client";
+
+const DRAFT_SESSION_HEADER = "x-draft-session-id";
 
 export function listEvents(limit = 20, offset = 0): Promise<ListEventsResp> {
   const params = new URLSearchParams({
@@ -40,8 +43,10 @@ export function createEvent(params: CreateEventRequest): Promise<EventResp> {
 
 export function createEventDraft(
   params: CreateEventDraftRequest,
+  draftSessionId?: string,
 ): Promise<EventResp> {
   console.info("[event-api] creating event draft", {
+    hasDraftSession: Boolean(draftSessionId),
     titleLength: params.title?.trim().length ?? 0,
     blockCount: params.content?.blocks.length ?? 0,
     tagCount: params.tags?.length ?? 0,
@@ -49,6 +54,7 @@ export function createEventDraft(
   return requestJson<CreateEventDraftRequest, EventResp>("/event/drafts", {
     method: "POST",
     auth: true,
+    headers: draftSessionHeaders(draftSessionId),
     body: params,
   });
 }
@@ -56,10 +62,12 @@ export function createEventDraft(
 export function updateEventDraft(
   eventId: string,
   params: UpdateEventDraftRequest,
+  draftSessionId?: string,
 ): Promise<EventResp> {
   const normalizedEventId = eventId.trim();
   console.info("[event-api] updating event draft", {
     eventId: normalizedEventId,
+    hasDraftSession: Boolean(draftSessionId),
     titleLength: params.title.trim().length,
     blockCount: params.content.blocks.length,
     tagCount: params.tags.length,
@@ -69,35 +77,130 @@ export function updateEventDraft(
     {
       method: "PATCH",
       auth: true,
+      headers: draftSessionHeaders(draftSessionId),
       body: params,
     },
   );
 }
 
-export function publishEventDraft(eventId: string): Promise<EventResp> {
+export function publishEventDraft(
+  eventId: string,
+  draftSessionId?: string,
+): Promise<EventResp> {
   const normalizedEventId = eventId.trim();
   console.info("[event-api] publishing event draft", {
     eventId: normalizedEventId,
+    hasDraftSession: Boolean(draftSessionId),
   });
   return requestJson<undefined, EventResp>(
     `/event/${encodeURIComponent(normalizedEventId)}/publish`,
     {
       method: "POST",
       auth: true,
+      headers: draftSessionHeaders(draftSessionId),
     },
   );
 }
 
-export function deleteEventDraft(eventId: string): Promise<void> {
+export function deleteEventDraft(
+  eventId: string,
+  draftSessionId?: string,
+): Promise<void> {
   const normalizedEventId = eventId.trim();
   console.info("[event-api] deleting event draft", {
     eventId: normalizedEventId,
+    hasDraftSession: Boolean(draftSessionId),
   });
   return requestJson<undefined, void>(
     `/event/${encodeURIComponent(normalizedEventId)}`,
     {
       method: "DELETE",
       auth: true,
+      headers: draftSessionHeaders(draftSessionId),
+    },
+  );
+}
+
+export function openCurrentEventDraft(
+  draftSessionId: string,
+): Promise<OpenEventDraftResp> {
+  console.info("[event-api] opening current event draft", {
+    draftSessionId,
+  });
+  return requestJson<{ draft_session_id: string }, OpenEventDraftResp>(
+    "/me/event-draft/open",
+    {
+      method: "POST",
+      auth: true,
+      body: { draft_session_id: draftSessionId },
+    },
+  );
+}
+
+export function updateCurrentEventDraft(
+  draftSessionId: string,
+  params: UpdateEventDraftRequest,
+): Promise<EventResp> {
+  console.info("[event-api] updating current event draft", {
+    draftSessionId,
+    titleLength: params.title.trim().length,
+    blockCount: params.content.blocks.length,
+    tagCount: params.tags.length,
+  });
+  return requestJson<UpdateEventDraftRequest, EventResp>("/me/event-draft", {
+    method: "PATCH",
+    auth: true,
+    headers: draftSessionHeaders(draftSessionId),
+    body: params,
+  });
+}
+
+export function publishCurrentEventDraft(
+  draftSessionId: string,
+): Promise<EventResp> {
+  console.info("[event-api] publishing current event draft", {
+    draftSessionId,
+  });
+  return requestJson<undefined, EventResp>("/me/event-draft/publish", {
+    method: "POST",
+    auth: true,
+    headers: draftSessionHeaders(draftSessionId),
+  });
+}
+
+export function deleteCurrentEventDraft(draftSessionId: string): Promise<void> {
+  console.info("[event-api] deleting current event draft", {
+    draftSessionId,
+  });
+  return requestJson<undefined, void>("/me/event-draft", {
+    method: "DELETE",
+    auth: true,
+    headers: draftSessionHeaders(draftSessionId),
+  });
+}
+
+export function refreshCurrentEventDraftLease(
+  draftSessionId: string,
+): Promise<void> {
+  return requestJson<{ draft_session_id: string }, void>(
+    "/me/event-draft/lease/refresh",
+    {
+      method: "POST",
+      auth: true,
+      body: { draft_session_id: draftSessionId },
+    },
+  );
+}
+
+export function releaseCurrentEventDraftLease(
+  draftSessionId: string,
+): Promise<void> {
+  return requestJson<{ draft_session_id: string }, void>(
+    "/me/event-draft/lease",
+    {
+      method: "DELETE",
+      auth: true,
+      body: { draft_session_id: draftSessionId },
     },
   );
 }
@@ -120,10 +223,18 @@ export function listMyEvents(
   );
 }
 
+function draftSessionHeaders(
+  draftSessionId: string | null | undefined,
+): Record<string, string> {
+  const value = draftSessionId?.trim();
+  return value ? { [DRAFT_SESSION_HEADER]: value } : {};
+}
+
 export type {
   CreateEventDraftRequest,
   CreateEventRequest,
   EventResp,
   ListEventsResp,
+  OpenEventDraftResp,
   UpdateEventDraftRequest,
 };

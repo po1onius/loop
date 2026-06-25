@@ -169,6 +169,26 @@ pub struct UpdateEventDraftRequest {
 
 #[derive(Debug, Serialize, Deserialize, TS)]
 #[ts(export_to = "dto.ts")]
+pub struct OpenEventDraftRequest {
+    pub draft_session_id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export_to = "dto.ts")]
+pub struct OpenEventDraftResp {
+    pub draft_session_id: String,
+    pub lease_expires_in: i32,
+    pub event: EventResp,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export_to = "dto.ts")]
+pub struct RefreshEventDraftLeaseRequest {
+    pub draft_session_id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export_to = "dto.ts")]
 pub struct EventResp {
     pub event_id: String,
     pub creator_id: String,
