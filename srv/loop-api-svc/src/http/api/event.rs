@@ -1,6 +1,7 @@
 use crate::{
-    db_conn, redis_conn,
+    db_conn,
     http::{AppRoutes, AuthInfo, HttpErr, ResultExt, err_key::*},
+    redis_conn,
 };
 use axum::{
     Json,
@@ -149,6 +150,62 @@ pub async fn open_event_draft(
         draft_session_id = %session_id,
         lease_expires_in = DRAFT_LOCK_TTL_SECONDS,
         "event draft opened with edit lease"
+    );
+
+    Ok(Json(OpenEventDraftResp {
+        draft_session_id: session_id,
+        lease_expires_in: DRAFT_LOCK_TTL_SECONDS,
+        event: to_event_resp(event)?,
+    }))
+}
+
+#[tracing::instrument(
+    name = "event.draft.new",
+    skip_all,
+    fields(user.id = auth.user_id)
+)]
+pub async fn create_new_event_draft(
+    State(_state): State<crate::http::AppState>,
+    auth: AuthInfo,
+    Json(req): Json<OpenEventDraftRequest>,
+) -> Result<Json<OpenEventDraftResp>, HttpErr> {
+    let session_id = normalize_draft_session_id(&req.draft_session_id)?;
+    acquire_draft_edit_lock(auth.user_id, &session_id).await?;
+
+    let mut conn = db_conn!();
+    // 一个用户只允许保留一份活动草稿。“新建”需要在同一事务中删除旧草稿并创建空白草稿，
+    // 避免客户端分步调用时因网络中断留下“旧草稿已删、空白草稿未创建”的中间状态。
+    let draft_result = conn
+        .transaction::<(Event, Option<i64>), HttpErr, _>(async |conn| {
+            let previous_draft = Event::select_owned_draft_for_update_by_owner(auth.user_id, conn)
+                .await
+                .internal(DB_ERROR)?;
+            let previous_event_id = previous_draft.as_ref().map(|event| event.event_id);
+            if let Some(event) = previous_draft {
+                Event::delete_draft(event.event_id, auth.user_id, conn)
+                    .await
+                    .internal(DB_ERROR)?;
+            }
+            let new_draft = insert_empty_event_draft_with_conn(auth.user_id, conn).await?;
+            Ok((new_draft, previous_event_id))
+        })
+        .await;
+    let (event, previous_event_id) = match draft_result {
+        Ok(result) => result,
+        Err(err) => {
+            release_draft_edit_lock_best_effort(auth.user_id, &session_id).await;
+            return Err(err);
+        }
+    };
+
+    tracing::info!(
+        event = "event.new_draft_created",
+        event_id = event.event_id,
+        previous_event_id,
+        user_id = auth.user_id,
+        draft_session_id = %session_id,
+        lease_expires_in = DRAFT_LOCK_TTL_SECONDS,
+        "old event draft replaced with a new blank draft"
     );
 
     Ok(Json(OpenEventDraftResp {
@@ -1384,6 +1441,12 @@ pub fn route(state: crate::http::AppState) -> AppRoutes {
             "/me/event-draft/open",
             EVENT_CREATE_PERMISSION,
             post(open_event_draft),
+        )
+        .protected(
+            Method::POST,
+            "/me/event-draft/new",
+            EVENT_CREATE_PERMISSION,
+            post(create_new_event_draft),
         )
         .protected(
             Method::PATCH,

@@ -137,6 +137,22 @@ export function openCurrentEventDraft(
   );
 }
 
+export function openNewCurrentEventDraft(
+  draftSessionId: string,
+): Promise<OpenEventDraftResp> {
+  console.info("[event-api] opening new blank event draft", {
+    draftSessionId,
+  });
+  return requestJson<{ draft_session_id: string }, OpenEventDraftResp>(
+    "/me/event-draft/new",
+    {
+      method: "POST",
+      auth: true,
+      body: { draft_session_id: draftSessionId },
+    },
+  );
+}
+
 export function updateCurrentEventDraft(
   draftSessionId: string,
   params: UpdateEventDraftRequest,

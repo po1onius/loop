@@ -1,11 +1,31 @@
-FROM docker.io/rust:1.96-bookworm AS builder
+FROM docker.io/debian:bookworm-slim AS diesel-cli-downloader
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libpq-dev pkg-config \
+    && apt-get install -y --no-install-recommends ca-certificates curl xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
-# 单机部署使用独立的一次性 migration 容器，避免把 diesel cli 放进业务镜像。
-RUN cargo install diesel_cli --no-default-features --features postgres --locked
+# 直接使用 Diesel 官方发布的预编译 CLI，避免为了一个迁移工具引入 Rust 编译环境。
+# TARGETARCH 由 Docker/Podman 构建器注入；未注入时使用 dpkg 识别当前平台，便于本地直接构建。
+ARG TARGETARCH
+ARG DIESEL_CLI_VERSION=2.3.11
+RUN set -eux; \
+    target_arch="${TARGETARCH:-$(dpkg --print-architecture)}"; \
+    case "${target_arch}" in \
+        amd64) diesel_arch="x86_64" ;; \
+        arm64) diesel_arch="aarch64" ;; \
+        *) echo "unsupported Docker target architecture: ${target_arch}" >&2; exit 1 ;; \
+    esac; \
+    artifact="diesel_cli-${diesel_arch}-unknown-linux-gnu.tar.xz"; \
+    base_url="https://github.com/diesel-rs/diesel/releases/download/v${DIESEL_CLI_VERSION}"; \
+    curl -fsSL "${base_url}/${artifact}" -o "/tmp/${artifact}"; \
+    curl -fsSL "${base_url}/${artifact}.sha256" -o "/tmp/${artifact}.sha256"; \
+    cd /tmp; \
+    sha256sum -c "${artifact}.sha256"; \
+    mkdir -p /opt/diesel-cli; \
+    tar -xJf "${artifact}" -C /opt/diesel-cli; \
+    diesel_path="$(find /opt/diesel-cli -type f -name diesel -print -quit)"; \
+    test -n "${diesel_path}"; \
+    install -m 0755 "${diesel_path}" /usr/local/bin/diesel
 
 FROM docker.io/debian:bookworm-slim AS runtime
 
@@ -13,6 +33,6 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates libpq5 postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /usr/local/cargo/bin/diesel /usr/local/bin/diesel
+COPY --from=diesel-cli-downloader /usr/local/bin/diesel /usr/local/bin/diesel
 
 WORKDIR /work

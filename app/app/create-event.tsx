@@ -25,7 +25,9 @@ import { IconSymbol } from "@/components/ui/icon-symbol";
 import type { EventContentDoc, EventResp, UpdateEventDraftRequest } from "@/lib/dto";
 import {
   deleteCurrentEventDraft,
+  listMyEvents,
   openCurrentEventDraft,
+  openNewCurrentEventDraft,
   publishCurrentEventDraft,
   refreshCurrentEventDraftLease,
   releaseCurrentEventDraftLease,
@@ -39,7 +41,6 @@ type NativeDateTimePickerMode = "date" | "time" | "datetime";
 
 type EditorMessage =
   | { type: "ready" }
-  | { type: "dirty" }
   | { type: "pick_image" }
   | {
       type: "content";
@@ -85,15 +86,15 @@ type ImagePreviewSource = {
 
 type DateTimePickerTarget = "start" | "end";
 type CreateEventTab = "meta" | "content";
-type ExportPurpose = "autosave" | "publish";
+type ExportPurpose = "save-draft" | "publish";
+type DraftEntryState = "checking" | "choosing" | "opening" | "error" | "editing";
+type DraftEntryChoice = "continue" | "new";
 type SaveDraftOptions = {
   force?: boolean;
-  source: "autosave" | "publish";
+  source: "manual" | "publish";
 };
 
 const EVENT_CONTENT_VERSION = 1;
-const AUTOSAVE_DEBOUNCE_MS = 1500;
-const AUTOSAVE_INTERVAL_MS = 15000;
 const DRAFT_LEASE_MIN_REFRESH_MS = 10_000;
 const EVENT_TIME_MINUTE_INTERVAL = 5;
 const EDITOR_KEYBOARD_EXTRA_BOTTOM_INSET = 64;
@@ -118,10 +119,10 @@ export default function CreateEventScreen() {
   const pendingRequestIdRef = useRef<string | null>(null);
   const pendingExportPurposeRef = useRef<ExportPurpose | null>(null);
   const exportTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const autosaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const autosaveIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const draftLeaseIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mountedRef = useRef(true);
+  const editorReadyRef = useRef(false);
+  const draftEntryAttemptRef = useRef(0);
   const draftWorkCountRef = useRef(0);
   const draftOpenedRef = useRef(false);
   const draftSessionIdRef = useRef(createDraftSessionId());
@@ -153,10 +154,13 @@ export default function CreateEventScreen() {
   const [uploadingImage, setUploadingImage] = useState(false);
   const [savingDraft, setSavingDraft] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [loadingDraft, setLoadingDraft] = useState(true);
   const [draftOpened, setDraftOpened] = useState(false);
+  const [draftEntryState, setDraftEntryState] =
+    useState<DraftEntryState>("checking");
+  const [existingDraft, setExistingDraft] = useState<EventResp | null>(null);
 
   useEffect(() => {
+    mountedRef.current = true;
     const cleanupDraftSessionId = draftSessionIdRef.current;
     return () => {
       mountedRef.current = false;
@@ -178,18 +182,14 @@ export default function CreateEventScreen() {
       if (exportTimeoutRef.current) {
         clearTimeout(exportTimeoutRef.current);
       }
-      if (autosaveTimeoutRef.current) {
-        clearTimeout(autosaveTimeoutRef.current);
-      }
-      if (autosaveIntervalRef.current) {
-        clearInterval(autosaveIntervalRef.current);
-      }
       if (draftLeaseIntervalRef.current) {
         clearInterval(draftLeaseIntervalRef.current);
       }
     };
   }, []);
 
+  const loadingDraft =
+    draftEntryState === "checking" || draftEntryState === "opening";
   const busy = loadingDraft || uploadingImage || submitting || savingDraft;
   const bottomSafeGap = Math.max(safeAreaInsets.bottom, 8);
   const statusMessage = error
@@ -199,12 +199,14 @@ export default function CreateEventScreen() {
       : savingDraft
       ? "正在保存草稿..."
       : status;
-  const headerStatusMessage = statusMessage || "支持图文排版，草稿会自动保存";
+  const headerStatusMessage =
+    statusMessage || "请使用右上角“存草稿”主动保存";
   const showHeaderStatusSpinner = Boolean(statusMessage) && busy;
   const canSubmit = useMemo(
     () => draftOpened && editorReady && title.trim().length > 0 && !busy,
     [busy, draftOpened, editorReady, title],
   );
+  const canSaveDraft = draftOpened && editorReady && !busy;
   const pickerTitle =
     dateTimePickerTarget === "start" ? "选择开始时间" : "选择结束时间";
 
@@ -274,10 +276,9 @@ export default function CreateEventScreen() {
       setTagText(event.tags.join(" "));
       setDraftOpened(true);
       setError("");
-      setStatus(event.updated_at ? "草稿已加载" : "");
       startDraftLeaseRefresh(leaseExpiresIn);
 
-      if (editorReady) {
+      if (editorReadyRef.current) {
         loadEditorContent(normalizedDoc);
         pendingEditorContentRef.current = null;
       }
@@ -290,37 +291,106 @@ export default function CreateEventScreen() {
         hasMeaningfulContent: draftHasMeaningfulContentRef.current,
       });
     },
-    [editorReady, loadEditorContent, startDraftLeaseRefresh],
+    [loadEditorContent, startDraftLeaseRefresh],
   );
 
-  useEffect(() => {
-    let cancelled = false;
-    const draftSessionId = draftSessionIdRef.current;
-    setLoadingDraft(true);
-    setStatus("正在加载草稿...");
-    void openCurrentEventDraft(draftSessionId)
-      .then((resp) => {
-        if (cancelled || !mountedRef.current) {
+  const openDraftForEditing = useCallback(
+    async (choice: DraftEntryChoice, attemptId?: number) => {
+      const currentAttempt =
+        attemptId ?? (draftEntryAttemptRef.current += 1);
+      setDraftEntryState("opening");
+      setError("");
+      setStatus(choice === "new" ? "正在新建活动..." : "正在加载草稿...");
+      console.info("[create-event] draft entry selected", {
+        choice,
+      });
+
+      try {
+        const draftSessionId = draftSessionIdRef.current;
+        const resp =
+          choice === "new"
+            ? await openNewCurrentEventDraft(draftSessionId)
+            : await openCurrentEventDraft(draftSessionId);
+        if (!mountedRef.current) {
+          // 页面在请求完成前已经退出，此时生命周期清理尚不知道草稿已取得编辑锁，需要主动释放。
+          void releaseCurrentEventDraftLease(draftSessionId).catch((e) => {
+            console.warn("[create-event] stale draft lease release failed", e);
+          });
+          return;
+        }
+        if (draftEntryAttemptRef.current !== currentAttempt) {
           return;
         }
         applyOpenedDraft(resp.event, resp.lease_expires_in);
-      })
-      .catch((e) => {
-        console.warn("[create-event] open draft failed", e);
-        if (!cancelled && mountedRef.current) {
+        setExistingDraft(null);
+        setDraftEntryState("editing");
+        setStatus(choice === "new" ? "已新建空白活动" : "草稿已加载");
+      } catch (e) {
+        console.warn("[create-event] open selected draft failed", {
+          choice,
+          error: e,
+        });
+        if (
+          mountedRef.current &&
+          draftEntryAttemptRef.current === currentAttempt
+        ) {
+          setStatus("");
           setError(e instanceof Error ? e.message : "草稿加载失败");
+          setDraftEntryState("error");
         }
-      })
-      .finally(() => {
-        if (!cancelled && mountedRef.current) {
-          setLoadingDraft(false);
-        }
+      }
+    },
+    [applyOpenedDraft],
+  );
+
+  const inspectDraftEntry = useCallback(async () => {
+    const currentAttempt = (draftEntryAttemptRef.current += 1);
+    setDraftEntryState("checking");
+    setExistingDraft(null);
+    setError("");
+    setStatus("正在检查活动草稿...");
+
+    try {
+      const response = await listMyEvents("draft", 1, 0);
+      if (
+        !mountedRef.current ||
+        draftEntryAttemptRef.current !== currentAttempt
+      ) {
+        return;
+      }
+      const draft = response.items[0] ?? null;
+      const hasSavedContent = draft
+        ? hasMeaningfulDraftContent(eventToDraftUpdateRequest(draft))
+        : false;
+      console.info("[create-event] draft entry inspected", {
+        hasDraft: Boolean(draft),
+        hasSavedContent,
+        eventId: draft?.event_id ?? null,
       });
 
-    return () => {
-      cancelled = true;
-    };
-  }, [applyOpenedDraft]);
+      if (draft && hasSavedContent) {
+        setExistingDraft(draft);
+        setStatus("");
+        setDraftEntryState("choosing");
+        return;
+      }
+      await openDraftForEditing("new", currentAttempt);
+    } catch (e) {
+      console.warn("[create-event] inspect draft entry failed", e);
+      if (
+        mountedRef.current &&
+        draftEntryAttemptRef.current === currentAttempt
+      ) {
+        setStatus("");
+        setError(e instanceof Error ? e.message : "活动草稿检查失败");
+        setDraftEntryState("error");
+      }
+    }
+  }, [openDraftForEditing]);
+
+  useEffect(() => {
+    void inspectDraftEntry();
+  }, [inspectDraftEntry]);
 
   const applyDateTime = useCallback(
     (target: DateTimePickerTarget, value: Date) => {
@@ -627,19 +697,7 @@ export default function CreateEventScreen() {
 
   const requestEditorExport = useCallback(
     (purpose: ExportPurpose) => {
-      if (!editorReady) {
-        return;
-      }
-      if (purpose === "autosave" && !draftOpened) {
-        return;
-      }
-      if (
-        purpose === "autosave" &&
-        (uploadingImage || submitting || draftWorkCountRef.current > 0)
-      ) {
-        return;
-      }
-      if (purpose === "autosave" && pendingRequestIdRef.current) {
+      if (!editorReady || !draftOpened || pendingRequestIdRef.current) {
         return;
       }
 
@@ -668,23 +726,13 @@ export default function CreateEventScreen() {
           return;
         }
         setSavingDraft(false);
-        console.warn("[create-event] autosave export timed out");
+        setStatus("");
+        setError("编辑器响应超时，草稿未保存，请重试");
+        console.warn("[create-event] manual draft export timed out");
       }, 8000);
     },
-    [draftOpened, editorReady, submitting, uploadingImage],
+    [draftOpened, editorReady],
   );
-
-  const scheduleAutosave = useCallback(() => {
-    if (!draftOpened || !editorReady || submitting || uploadingImage) {
-      return;
-    }
-    if (autosaveTimeoutRef.current) {
-      clearTimeout(autosaveTimeoutRef.current);
-    }
-    autosaveTimeoutRef.current = setTimeout(() => {
-      requestEditorExport("autosave");
-    }, AUTOSAVE_DEBOUNCE_MS);
-  }, [draftOpened, editorReady, requestEditorExport, submitting, uploadingImage]);
 
   useEffect(() => {
     if (!editorReady) {
@@ -696,21 +744,6 @@ export default function CreateEventScreen() {
       pendingEditorContentRef.current = null;
     }
   }, [editorReady, loadEditorContent]);
-
-  useEffect(() => {
-    if (!editorReady || !draftOpened) {
-      return;
-    }
-    autosaveIntervalRef.current = setInterval(() => {
-      requestEditorExport("autosave");
-    }, AUTOSAVE_INTERVAL_MS);
-    return () => {
-      if (autosaveIntervalRef.current) {
-        clearInterval(autosaveIntervalRef.current);
-        autosaveIntervalRef.current = null;
-      }
-    };
-  }, [draftOpened, editorReady, requestEditorExport]);
 
   useEffect(() => {
     if (Platform.OS !== "ios") {
@@ -873,7 +906,6 @@ export default function CreateEventScreen() {
             ? `${uploadedCount} 张图片已插入正文，${failedCount} 张上传失败`
             : `${uploadedCount} 张图片已插入正文`,
         );
-        scheduleAutosave();
       }
       if (failedCount > 0 && uploadedCount === 0) {
         setError(`${failedCount} 张图片上传失败，失败图片不会发布`);
@@ -888,7 +920,6 @@ export default function CreateEventScreen() {
     busy,
     injectLocalImage,
     markImageUploadFailed,
-    scheduleAutosave,
     updateUploadedImage,
   ]);
 
@@ -900,12 +931,8 @@ export default function CreateEventScreen() {
       }
 
       if (message.type === "ready") {
+        editorReadyRef.current = true;
         setEditorReady(true);
-        return;
-      }
-
-      if (message.type === "dirty") {
-        // 正文输入会频繁触发 dirty 消息；这里只消费消息，不再立即触发草稿保存。
         return;
       }
 
@@ -938,12 +965,18 @@ export default function CreateEventScreen() {
         void publishDoc(message.doc, message.textLength, message.imageCount);
         return;
       }
-      void saveDraft(message.doc, { source: "autosave" }).catch((e) => {
-        console.warn("[create-event] autosave failed", e);
-        setSavingDraft(false);
-        setStatus("");
-        setError(e instanceof Error ? e.message : "草稿保存失败");
-      });
+      void saveDraft(message.doc, { source: "manual" })
+        .catch((e) => {
+          console.warn("[create-event] manual draft save failed", e);
+          setStatus("");
+          setError(e instanceof Error ? e.message : "草稿保存失败");
+        })
+        .finally(() => {
+          // 未修改草稿会在发起网络请求前直接返回，因此仍需在这里统一关闭按钮 loading。
+          if (mountedRef.current) {
+            setSavingDraft(false);
+          }
+        });
     },
     [handlePickImages, publishDoc, saveDraft],
   );
@@ -963,6 +996,25 @@ export default function CreateEventScreen() {
     },
     [activeTab, blurEditor],
   );
+
+  const handleSaveDraft = useCallback(() => {
+    if (!draftOpened || !editorReady) {
+      setError("草稿编辑器尚未加载完成，请稍后再试");
+      return;
+    }
+    if (busy || draftWorkCountRef.current > 0) {
+      return;
+    }
+
+    setError("");
+    setStatus("正在整理草稿...");
+    setSavingDraft(true);
+    console.info("[create-event] manual draft save requested", {
+      eventId: draftEventIdRef.current,
+      activeTab,
+    });
+    requestEditorExport("save-draft");
+  }, [activeTab, busy, draftOpened, editorReady, requestEditorExport]);
 
   const handleSubmit = useCallback(() => {
     if (!title.trim()) {
@@ -1023,21 +1075,39 @@ export default function CreateEventScreen() {
                 </ThemedText>
               </View>
             </View>
-            <Pressable
-              accessibilityRole="button"
-              onPress={handleSubmit}
-              disabled={!canSubmit}
-              style={[
-                styles.publishButton,
-                !canSubmit ? styles.buttonDisabled : undefined,
-              ]}
-            >
-              {submitting ? (
-                <ActivityIndicator color="#FFFFFF" size="small" />
-              ) : (
-                <ThemedText style={styles.publishButtonText}>发布</ThemedText>
-              )}
-            </Pressable>
+            <View style={styles.headerActions}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="存草稿"
+                onPress={handleSaveDraft}
+                disabled={!canSaveDraft}
+                style={[
+                  styles.saveDraftButton,
+                  !canSaveDraft ? styles.buttonDisabled : undefined,
+                ]}
+              >
+                {savingDraft && !submitting ? (
+                  <ActivityIndicator color="#0A7EA4" size="small" />
+                ) : (
+                  <ThemedText style={styles.saveDraftButtonText}>存草稿</ThemedText>
+                )}
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                onPress={handleSubmit}
+                disabled={!canSubmit}
+                style={[
+                  styles.publishButton,
+                  !canSubmit ? styles.buttonDisabled : undefined,
+                ]}
+              >
+                {submitting ? (
+                  <ActivityIndicator color="#FFFFFF" size="small" />
+                ) : (
+                  <ThemedText style={styles.publishButtonText}>发布</ThemedText>
+                )}
+              </Pressable>
+            </View>
           </View>
 
           <View style={styles.tabBar}>
@@ -1180,9 +1250,133 @@ export default function CreateEventScreen() {
 
           {nativeDateTimePicker}
           {iosDateTimePicker}
+          <DraftEntryModal
+            state={draftEntryState}
+            draft={existingDraft}
+            error={error}
+            onContinue={() => void openDraftForEditing("continue")}
+            onNew={() => void openDraftForEditing("new")}
+            onRetry={() => void inspectDraftEntry()}
+            onCancel={() => router.back()}
+          />
         </ThemedView>
       </KeyboardAvoidingView>
     </SafeAreaView>
+  );
+}
+
+function DraftEntryModal({
+  state,
+  draft,
+  error,
+  onContinue,
+  onNew,
+  onRetry,
+  onCancel,
+}: {
+  state: DraftEntryState;
+  draft: EventResp | null;
+  error: string;
+  onContinue: () => void;
+  onNew: () => void;
+  onRetry: () => void;
+  onCancel: () => void;
+}) {
+  const isLoading = state === "checking" || state === "opening";
+  return (
+    <Modal
+      animationType="fade"
+      transparent
+      visible={state !== "editing"}
+      statusBarTranslucent
+      onRequestClose={onCancel}
+    >
+      <View style={styles.draftEntryBackdrop}>
+        <View style={styles.draftEntryCard}>
+          {isLoading ? (
+            <View style={styles.draftEntryLoading}>
+              <ActivityIndicator size="large" color="#0A7EA4" />
+              <ThemedText type="defaultSemiBold" style={styles.draftEntryTitle}>
+                {state === "checking" ? "正在检查草稿" : "正在准备编辑器"}
+              </ThemedText>
+              <ThemedText style={styles.draftEntryDescription}>
+                请稍候，不会在编辑过程中自动保存。
+              </ThemedText>
+            </View>
+          ) : state === "choosing" && draft ? (
+            <>
+              <ThemedText type="subtitle" style={styles.draftEntryTitle}>
+                继续上次的活动吗？
+              </ThemedText>
+              <ThemedText style={styles.draftEntryDescription}>
+                检测到一份已保存草稿。你可以继续编辑，或清空它并新建活动。
+              </ThemedText>
+              <View style={styles.draftPreview}>
+                <ThemedText
+                  type="defaultSemiBold"
+                  numberOfLines={2}
+                  style={styles.draftPreviewTitle}
+                >
+                  {draft.title.trim() || "未命名活动"}
+                </ThemedText>
+                <ThemedText style={styles.draftPreviewMeta}>
+                  更新于 {formatDraftUpdatedAt(draft.updated_at)}
+                </ThemedText>
+              </View>
+              <Pressable
+                accessibilityRole="button"
+                onPress={onContinue}
+                style={[styles.draftEntryButton, styles.draftContinueButton]}
+              >
+                <ThemedText style={styles.draftContinueButtonText}>
+                  从草稿继续编辑
+                </ThemedText>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityHint="清空当前草稿并创建空白活动"
+                onPress={onNew}
+                style={[styles.draftEntryButton, styles.draftNewButton]}
+              >
+                <ThemedText style={styles.draftNewButtonText}>
+                  清空草稿并新建
+                </ThemedText>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                onPress={onCancel}
+                style={styles.draftCancelButton}
+              >
+                <ThemedText style={styles.draftCancelButtonText}>取消</ThemedText>
+              </Pressable>
+            </>
+          ) : (
+            <>
+              <ThemedText type="subtitle" style={styles.draftEntryTitle}>
+                草稿暂时无法打开
+              </ThemedText>
+              <ThemedText style={[styles.draftEntryDescription, styles.errorText]}>
+                {error || "请检查网络后重试"}
+              </ThemedText>
+              <Pressable
+                accessibilityRole="button"
+                onPress={onRetry}
+                style={[styles.draftEntryButton, styles.draftContinueButton]}
+              >
+                <ThemedText style={styles.draftContinueButtonText}>重试</ThemedText>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                onPress={onCancel}
+                style={styles.draftCancelButton}
+              >
+                <ThemedText style={styles.draftCancelButtonText}>返回</ThemedText>
+              </Pressable>
+            </>
+          )}
+        </View>
+      </View>
+    </Modal>
   );
 }
 
@@ -1443,11 +1637,7 @@ function parseEditorMessage(raw: string): EditorMessage | null {
 
     const message = value as Record<string, unknown>;
     const messageType = message["type"];
-    if (
-      messageType === "ready" ||
-      messageType === "dirty" ||
-      messageType === "pick_image"
-    ) {
+    if (messageType === "ready" || messageType === "pick_image") {
       return { type: messageType };
     }
     if (messageType === "log" && typeof message["message"] === "string") {
@@ -1571,6 +1761,15 @@ function formatLocalDateTime(value: Date): string {
   return `${formatDate(value)} ${pad2(value.getHours())}:${pad2(value.getMinutes())}`;
 }
 
+function formatDraftUpdatedAt(value: string): string {
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) {
+    console.warn("[create-event] invalid draft updated time", { value });
+    return "未知时间";
+  }
+  return formatLocalDateTime(new Date(timestamp));
+}
+
 function formatDate(value: Date): string {
   return `${value.getFullYear()}-${pad2(value.getMonth() + 1)}-${pad2(value.getDate())}`;
 }
@@ -1656,8 +1855,28 @@ const styles = StyleSheet.create({
     lineHeight: 16,
     opacity: 0.62,
   },
+  headerActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  saveDraftButton: {
+    minWidth: 68,
+    height: 40,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#0A7EA4",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#FFFFFF",
+  },
+  saveDraftButtonText: {
+    color: "#0A7EA4",
+    fontWeight: "700",
+  },
   publishButton: {
-    width: 74,
+    width: 62,
     height: 40,
     borderRadius: 10,
     alignItems: "center",
@@ -1801,6 +2020,86 @@ const styles = StyleSheet.create({
   },
   bottomSafeGap: {
     height: 8,
+  },
+  draftEntryBackdrop: {
+    flex: 1,
+    paddingHorizontal: 24,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(17, 24, 28, 0.52)",
+  },
+  draftEntryCard: {
+    width: "100%",
+    maxWidth: 420,
+    padding: 20,
+    borderRadius: 18,
+    backgroundColor: "#FFFFFF",
+    gap: 12,
+  },
+  draftEntryLoading: {
+    minHeight: 180,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 12,
+  },
+  draftEntryTitle: {
+    color: "#11181C",
+    textAlign: "center",
+  },
+  draftEntryDescription: {
+    color: "#687076",
+    fontSize: 14,
+    lineHeight: 21,
+    textAlign: "center",
+  },
+  draftPreview: {
+    marginVertical: 4,
+    padding: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#D9E0EA",
+    backgroundColor: "#F6F8FB",
+    gap: 5,
+  },
+  draftPreviewTitle: {
+    color: "#11181C",
+  },
+  draftPreviewMeta: {
+    color: "#687076",
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  draftEntryButton: {
+    minHeight: 46,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  draftContinueButton: {
+    backgroundColor: "#0A7EA4",
+  },
+  draftContinueButtonText: {
+    color: "#FFFFFF",
+    fontWeight: "700",
+  },
+  draftNewButton: {
+    borderWidth: 1,
+    borderColor: "#D64545",
+    backgroundColor: "#FFFFFF",
+  },
+  draftNewButtonText: {
+    color: "#D64545",
+    fontWeight: "700",
+  },
+  draftCancelButton: {
+    minHeight: 38,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  draftCancelButtonText: {
+    color: "#687076",
+    fontWeight: "600",
   },
   modalBackdrop: {
     flex: 1,

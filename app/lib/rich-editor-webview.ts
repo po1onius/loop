@@ -118,7 +118,6 @@ const createBlockId = () =>
   `b_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 
 let editor: Editor | null = null;
-let pendingDirtyTimer: number | null = null;
 const buttons = Array.from(document.querySelectorAll<HTMLButtonElement>(".toolbar button"));
 
 const EventBlockId = Extension.create({
@@ -232,21 +231,9 @@ editor = new Editor({
     post({ type: "ready" });
     queueMicrotask(updateToolbarState);
   },
-  onUpdate: () => notifyDirty(),
   onSelectionUpdate: () => updateToolbarState(),
   onTransaction: () => updateToolbarState(),
 });
-
-function notifyDirty() {
-  // 输入阶段只向原生层发送轻量 dirty 信号，真正的正文序列化仍由外层防抖触发。
-  if (pendingDirtyTimer !== null) {
-    return;
-  }
-  pendingDirtyTimer = window.setTimeout(() => {
-    pendingDirtyTimer = null;
-    post({ type: "dirty" });
-  }, 300);
-}
 
 function setButtonActive(button: HTMLButtonElement, active: boolean) {
   button.classList.toggle("active", active);
@@ -558,7 +545,7 @@ function loadContent(doc: EventContentDoc) {
       throw new Error("editor is not initialized");
     }
     const content = toProseMirrorDoc(doc);
-    // 加载服务端草稿属于状态恢复，不应触发 dirty/autosave 消息。
+    // 加载服务端草稿属于状态恢复，不触发编辑器的内容更新回调。
     currentEditor.commands.setContent(content, { emitUpdate: false });
     currentEditor.commands.blur();
     updateToolbarState();
