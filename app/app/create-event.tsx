@@ -24,14 +24,10 @@ import { ThemedView } from "@/components/themed-view";
 import { IconSymbol } from "@/components/ui/icon-symbol";
 import type { EventContentDoc, EventResp, UpdateEventDraftRequest } from "@/lib/dto";
 import {
-  deleteCurrentEventDraft,
-  listMyEvents,
-  openCurrentEventDraft,
-  openNewCurrentEventDraft,
-  publishCurrentEventDraft,
-  refreshCurrentEventDraftLease,
-  releaseCurrentEventDraftLease,
-  updateCurrentEventDraft,
+  createEventDraft,
+  listAllMyEventDrafts,
+  publishEventDraft,
+  updateEventDraft,
 } from "@/lib/event-api";
 import { uploadLocalImageAsset } from "@/lib/media-api";
 import { EVENT_RICH_EDITOR_HTML } from "@/lib/rich-editor-html";
@@ -88,14 +84,12 @@ type DateTimePickerTarget = "start" | "end";
 type CreateEventTab = "meta" | "content";
 type ExportPurpose = "save-draft" | "publish";
 type DraftEntryState = "checking" | "choosing" | "opening" | "error" | "editing";
-type DraftEntryChoice = "continue" | "new";
 type SaveDraftOptions = {
   force?: boolean;
   source: "manual" | "publish";
 };
 
 const EVENT_CONTENT_VERSION = 1;
-const DRAFT_LEASE_MIN_REFRESH_MS = 10_000;
 const EVENT_TIME_MINUTE_INTERVAL = 5;
 const EDITOR_KEYBOARD_EXTRA_BOTTOM_INSET = 64;
 const IOS_PICKER_TEXT_COLOR = "#11181C";
@@ -119,19 +113,15 @@ export default function CreateEventScreen() {
   const pendingRequestIdRef = useRef<string | null>(null);
   const pendingExportPurposeRef = useRef<ExportPurpose | null>(null);
   const exportTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const draftLeaseIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mountedRef = useRef(true);
   const editorReadyRef = useRef(false);
   const draftEntryAttemptRef = useRef(0);
   const draftWorkCountRef = useRef(0);
   const draftOpenedRef = useRef(false);
-  const draftSessionIdRef = useRef(createDraftSessionId());
   const draftEventIdRef = useRef<string | null>(null);
   const lastContentDocRef = useRef<EventContentDoc>(createEmptyContentDoc());
   const pendingEditorContentRef = useRef<EventContentDoc | null>(null);
   const savedDraftHashRef = useRef("");
-  const draftHasMeaningfulContentRef = useRef(false);
-  const publishedRef = useRef(false);
   const [editorReady, setEditorReady] = useState(false);
   const [activeTab, setActiveTab] = useState<CreateEventTab>("meta");
   const [title, setTitle] = useState("");
@@ -157,33 +147,14 @@ export default function CreateEventScreen() {
   const [draftOpened, setDraftOpened] = useState(false);
   const [draftEntryState, setDraftEntryState] =
     useState<DraftEntryState>("checking");
-  const [existingDraft, setExistingDraft] = useState<EventResp | null>(null);
+  const [existingDrafts, setExistingDrafts] = useState<EventResp[]>([]);
 
   useEffect(() => {
     mountedRef.current = true;
-    const cleanupDraftSessionId = draftSessionIdRef.current;
     return () => {
       mountedRef.current = false;
-      const draftEventId = draftEventIdRef.current;
-      if (
-        draftEventId &&
-        draftOpenedRef.current &&
-        !publishedRef.current &&
-        !draftHasMeaningfulContentRef.current
-      ) {
-        void deleteCurrentEventDraft(cleanupDraftSessionId).catch((e) => {
-          console.warn("[create-event] empty draft cleanup failed", e);
-        });
-      } else if (draftOpenedRef.current && !publishedRef.current) {
-        void releaseCurrentEventDraftLease(cleanupDraftSessionId).catch((e) => {
-          console.warn("[create-event] draft lease release failed", e);
-        });
-      }
       if (exportTimeoutRef.current) {
         clearTimeout(exportTimeoutRef.current);
-      }
-      if (draftLeaseIntervalRef.current) {
-        clearInterval(draftLeaseIntervalRef.current);
       }
     };
   }, []);
@@ -231,150 +202,98 @@ export default function CreateEventScreen() {
     );
   }, []);
 
-  const startDraftLeaseRefresh = useCallback((leaseExpiresIn: number) => {
-    if (draftLeaseIntervalRef.current) {
-      clearInterval(draftLeaseIntervalRef.current);
-    }
-    const refreshMs = Math.max(
-      DRAFT_LEASE_MIN_REFRESH_MS,
-      Math.floor((leaseExpiresIn * 1000) / 2),
-    );
-    draftLeaseIntervalRef.current = setInterval(() => {
-      if (!draftOpenedRef.current || publishedRef.current) {
-        return;
-      }
-      const draftSessionId = draftSessionIdRef.current;
-      void refreshCurrentEventDraftLease(draftSessionId).catch((e) => {
-        console.warn("[create-event] draft lease refresh failed", e);
-        if (mountedRef.current) {
-          setError(e instanceof Error ? e.message : "草稿编辑会话已过期");
-        }
-      });
-    }, refreshMs);
-  }, []);
+  const applyDraftSnapshot = useCallback(
+    (event: EventResp | null) => {
+      // 选择草稿只把服务端保存的快照填入表单和正文编辑器，不建立编辑会话，
+      // 也不对草稿加锁；后续只有用户主动点击“存草稿”才会写回数据库。
+      const normalizedDoc = event
+        ? normalizeContentDoc(event.content)
+        : createEmptyContentDoc();
+      const loadedReq = event
+        ? eventToDraftUpdateRequest(event, normalizedDoc)
+        : null;
 
-  const applyOpenedDraft = useCallback(
-    (event: EventResp, leaseExpiresIn: number) => {
-      const normalizedDoc = normalizeContentDoc(event.content);
-      const startDate = dateFromRfc3339(event.start_at);
-      const endDate = dateFromRfc3339(event.end_at);
-      const loadedReq = eventToDraftUpdateRequest(event, normalizedDoc);
-
-      draftEventIdRef.current = event.event_id;
+      draftEventIdRef.current = event?.event_id ?? null;
       lastContentDocRef.current = normalizedDoc;
       pendingEditorContentRef.current = normalizedDoc;
-      savedDraftHashRef.current = draftRequestHash(loadedReq);
-      draftHasMeaningfulContentRef.current = hasMeaningfulDraftContent(loadedReq);
+      savedDraftHashRef.current = loadedReq ? draftRequestHash(loadedReq) : "";
       draftOpenedRef.current = true;
 
-      setTitle(event.title);
-      setStartAt(startDate);
-      setEndAt(endDate);
-      setLocationName(event.location_name ?? "");
-      setLocationAddress(event.location_address ?? "");
-      setCapacityText(event.capacity !== null ? String(event.capacity) : "");
-      setTagText(event.tags.join(" "));
+      setTitle(event?.title ?? "");
+      setStartAt(dateFromRfc3339(event?.start_at ?? null));
+      setEndAt(dateFromRfc3339(event?.end_at ?? null));
+      setLocationName(event?.location_name ?? "");
+      setLocationAddress(event?.location_address ?? "");
+      setCapacityText(
+        event?.capacity !== null && event?.capacity !== undefined
+          ? String(event.capacity)
+          : "",
+      );
+      setTagText(event?.tags.join(" ") ?? "");
       setDraftOpened(true);
       setError("");
-      startDraftLeaseRefresh(leaseExpiresIn);
 
       if (editorReadyRef.current) {
         loadEditorContent(normalizedDoc);
         pendingEditorContentRef.current = null;
       }
 
-      console.info("[create-event] draft opened and applied", {
-        eventId: event.event_id,
-        draftSessionId: draftSessionIdRef.current,
+      console.info("[create-event] draft snapshot applied to editor", {
+        eventId: event?.event_id ?? null,
+        isNew: !event,
         blockCount: normalizedDoc.blocks.length,
-        titleLength: event.title.trim().length,
-        hasMeaningfulContent: draftHasMeaningfulContentRef.current,
+        titleLength: event?.title.trim().length ?? 0,
       });
     },
-    [loadEditorContent, startDraftLeaseRefresh],
+    [loadEditorContent],
   );
 
   const openDraftForEditing = useCallback(
-    async (choice: DraftEntryChoice, attemptId?: number) => {
-      const currentAttempt =
-        attemptId ?? (draftEntryAttemptRef.current += 1);
+    (draft: EventResp | null) => {
       setDraftEntryState("opening");
       setError("");
-      setStatus(choice === "new" ? "正在新建活动..." : "正在加载草稿...");
+      setStatus(draft ? "正在加载草稿..." : "正在新建活动...");
       console.info("[create-event] draft entry selected", {
-        choice,
+        eventId: draft?.event_id ?? null,
+        isNew: !draft,
       });
 
-      try {
-        const draftSessionId = draftSessionIdRef.current;
-        const resp =
-          choice === "new"
-            ? await openNewCurrentEventDraft(draftSessionId)
-            : await openCurrentEventDraft(draftSessionId);
-        if (!mountedRef.current) {
-          // 页面在请求完成前已经退出，此时生命周期清理尚不知道草稿已取得编辑锁，需要主动释放。
-          void releaseCurrentEventDraftLease(draftSessionId).catch((e) => {
-            console.warn("[create-event] stale draft lease release failed", e);
-          });
-          return;
-        }
-        if (draftEntryAttemptRef.current !== currentAttempt) {
-          return;
-        }
-        applyOpenedDraft(resp.event, resp.lease_expires_in);
-        setExistingDraft(null);
-        setDraftEntryState("editing");
-        setStatus(choice === "new" ? "已新建空白活动" : "草稿已加载");
-      } catch (e) {
-        console.warn("[create-event] open selected draft failed", {
-          choice,
-          error: e,
-        });
-        if (
-          mountedRef.current &&
-          draftEntryAttemptRef.current === currentAttempt
-        ) {
-          setStatus("");
-          setError(e instanceof Error ? e.message : "草稿加载失败");
-          setDraftEntryState("error");
-        }
-      }
+      applyDraftSnapshot(draft);
+      setExistingDrafts([]);
+      setDraftEntryState("editing");
+      setStatus(draft ? "草稿已加载" : "已打开空白活动");
     },
-    [applyOpenedDraft],
+    [applyDraftSnapshot],
   );
 
   const inspectDraftEntry = useCallback(async () => {
     const currentAttempt = (draftEntryAttemptRef.current += 1);
     setDraftEntryState("checking");
-    setExistingDraft(null);
+    setExistingDrafts([]);
     setError("");
     setStatus("正在检查活动草稿...");
 
     try {
-      const response = await listMyEvents("draft", 1, 0);
+      // 列表接口按 updated_at 倒序返回，最近保存的草稿排在最前面。
+      const drafts = await listAllMyEventDrafts();
       if (
         !mountedRef.current ||
         draftEntryAttemptRef.current !== currentAttempt
       ) {
         return;
       }
-      const draft = response.items[0] ?? null;
-      const hasSavedContent = draft
-        ? hasMeaningfulDraftContent(eventToDraftUpdateRequest(draft))
-        : false;
       console.info("[create-event] draft entry inspected", {
-        hasDraft: Boolean(draft),
-        hasSavedContent,
-        eventId: draft?.event_id ?? null,
+        draftCount: drafts.length,
+        eventIds: drafts.map((draft) => draft.event_id),
       });
 
-      if (draft && hasSavedContent) {
-        setExistingDraft(draft);
+      if (drafts.length > 0) {
+        setExistingDrafts(drafts);
         setStatus("");
         setDraftEntryState("choosing");
         return;
       }
-      await openDraftForEditing("new", currentAttempt);
+      openDraftForEditing(null);
     } catch (e) {
       console.warn("[create-event] inspect draft entry failed", e);
       if (
@@ -578,8 +497,8 @@ export default function CreateEventScreen() {
     ): Promise<string> => {
       const normalizedDoc = normalizeContentDoc(doc);
       lastContentDocRef.current = normalizedDoc;
-      if (!draftOpenedRef.current || !draftEventIdRef.current) {
-        throw new Error("草稿尚未加载完成，请稍后再试");
+      if (!draftOpenedRef.current) {
+        throw new Error("编辑器尚未准备完成，请稍后再试");
       }
       const req = buildDraftUpdateRequest({
         title,
@@ -605,20 +524,24 @@ export default function CreateEventScreen() {
         setStatus("草稿已保存");
         return draftEventIdRef.current;
       }
-      if (!hasMeaningfulDraftContent(req) && !draftEventIdRef.current) {
-        setStatus("");
-        return "";
-      }
-
       beginDraftWork();
       try {
-        const hasMeaningfulContent = hasMeaningfulDraftContent(req);
-        const saved = await updateCurrentEventDraft(draftSessionIdRef.current, req);
+        const currentEventId = draftEventIdRef.current;
+        // “+新建”只打开空白编辑器，首次主动保存时才创建数据库草稿；
+        // 从列表选择的草稿则始终按 ID 覆盖。没有版本条件，最后完成的保存生效。
+        const saved = currentEventId
+          ? await updateEventDraft(currentEventId, req)
+          : await createEventDraft(req);
         draftEventIdRef.current = saved.event_id;
         savedDraftHashRef.current = draftHash;
-        draftHasMeaningfulContentRef.current = hasMeaningfulContent;
         setError("");
         setStatus("草稿已保存");
+        console.info("[create-event] draft snapshot saved", {
+          eventId: saved.event_id,
+          operation: currentEventId ? "update" : "create",
+          source: options.source,
+          draftHash,
+        });
         return saved.event_id;
       } finally {
         endDraftWork();
@@ -670,8 +593,7 @@ export default function CreateEventScreen() {
           imageCount,
           blockCount: req.content.blocks.length,
         });
-        const published = await publishCurrentEventDraft(draftSessionIdRef.current);
-        publishedRef.current = true;
+        const published = await publishEventDraft(eventId);
         setStatus("发布成功");
         router.replace(`/event/${encodeURIComponent(published.event_id)}` as never);
       } catch (e) {
@@ -1252,10 +1174,10 @@ export default function CreateEventScreen() {
           {iosDateTimePicker}
           <DraftEntryModal
             state={draftEntryState}
-            draft={existingDraft}
+            drafts={existingDrafts}
             error={error}
-            onContinue={() => void openDraftForEditing("continue")}
-            onNew={() => void openDraftForEditing("new")}
+            onSelect={openDraftForEditing}
+            onNew={() => openDraftForEditing(null)}
             onRetry={() => void inspectDraftEntry()}
             onCancel={() => router.back()}
           />
@@ -1267,17 +1189,17 @@ export default function CreateEventScreen() {
 
 function DraftEntryModal({
   state,
-  draft,
+  drafts,
   error,
-  onContinue,
+  onSelect,
   onNew,
   onRetry,
   onCancel,
 }: {
   state: DraftEntryState;
-  draft: EventResp | null;
+  drafts: EventResp[];
   error: string;
-  onContinue: () => void;
+  onSelect: (draft: EventResp) => void;
   onNew: () => void;
   onRetry: () => void;
   onCancel: () => void;
@@ -1303,43 +1225,48 @@ function DraftEntryModal({
                 请稍候，不会在编辑过程中自动保存。
               </ThemedText>
             </View>
-          ) : state === "choosing" && draft ? (
+          ) : state === "choosing" && drafts.length > 0 ? (
             <>
               <ThemedText type="subtitle" style={styles.draftEntryTitle}>
-                继续上次的活动吗？
+                选择活动草稿
               </ThemedText>
               <ThemedText style={styles.draftEntryDescription}>
-                检测到一份已保存草稿。你可以继续编辑，或清空它并新建活动。
+                选择草稿只会把已保存内容填入编辑器，修改后点击“存草稿”才会覆盖保存。
               </ThemedText>
-              <View style={styles.draftPreview}>
-                <ThemedText
-                  type="defaultSemiBold"
-                  numberOfLines={2}
-                  style={styles.draftPreviewTitle}
-                >
-                  {draft.title.trim() || "未命名活动"}
-                </ThemedText>
-                <ThemedText style={styles.draftPreviewMeta}>
-                  更新于 {formatDraftUpdatedAt(draft.updated_at)}
-                </ThemedText>
-              </View>
+              <ScrollView
+                style={styles.draftList}
+                contentContainerStyle={styles.draftListContent}
+                showsVerticalScrollIndicator={false}
+              >
+                {drafts.map((draft, index) => (
+                  <Pressable
+                    key={draft.event_id}
+                    accessibilityRole="button"
+                    accessibilityHint="把这份草稿内容填入活动编辑器"
+                    onPress={() => onSelect(draft)}
+                    style={styles.draftPreview}
+                  >
+                    <ThemedText
+                      type="defaultSemiBold"
+                      numberOfLines={2}
+                      style={styles.draftPreviewTitle}
+                    >
+                      {draft.title.trim() || `草稿${index + 1}`}
+                    </ThemedText>
+                    <ThemedText style={styles.draftPreviewMeta}>
+                      保存于 {formatDraftUpdatedAt(draft.updated_at)}
+                    </ThemedText>
+                  </Pressable>
+                ))}
+              </ScrollView>
               <Pressable
                 accessibilityRole="button"
-                onPress={onContinue}
+                accessibilityHint="打开空白活动编辑器，不修改已有草稿"
+                onPress={onNew}
                 style={[styles.draftEntryButton, styles.draftContinueButton]}
               >
                 <ThemedText style={styles.draftContinueButtonText}>
-                  从草稿继续编辑
-                </ThemedText>
-              </Pressable>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityHint="清空当前草稿并创建空白活动"
-                onPress={onNew}
-                style={[styles.draftEntryButton, styles.draftNewButton]}
-              >
-                <ThemedText style={styles.draftNewButtonText}>
-                  清空草稿并新建
+                  +新建
                 </ThemedText>
               </Pressable>
               <Pressable
@@ -1526,19 +1453,6 @@ function toHex32(value: number): string {
   return (value >>> 0).toString(16).padStart(8, "0");
 }
 
-function hasMeaningfulDraftContent(req: UpdateEventDraftRequest): boolean {
-  return (
-    Boolean(req.title.trim()) ||
-    req.content.blocks.length > 0 ||
-    Boolean(req.start_at) ||
-    Boolean(req.end_at) ||
-    Boolean(req.location_name?.trim()) ||
-    Boolean(req.location_address?.trim()) ||
-    req.capacity !== null ||
-    req.tags.length > 0
-  );
-}
-
 function eventToDraftUpdateRequest(
   event: EventResp,
   doc = normalizeContentDoc(event.content),
@@ -1697,16 +1611,6 @@ function dateFromRfc3339(value: string | null): Date | null {
     return null;
   }
   return normalizePickerDate(new Date(timestamp));
-}
-
-function createDraftSessionId(): string {
-  const randomUUID = globalThis.crypto?.randomUUID?.();
-  if (randomUUID) {
-    return randomUUID;
-  }
-  return `draft_${Date.now().toString(36)}_${Math.random()
-    .toString(36)
-    .slice(2, 12)}`;
 }
 
 function createDefaultEventDate(): Date {
@@ -2052,8 +1956,14 @@ const styles = StyleSheet.create({
     lineHeight: 21,
     textAlign: "center",
   },
+  draftList: {
+    maxHeight: 320,
+  },
+  draftListContent: {
+    gap: 8,
+    paddingVertical: 4,
+  },
   draftPreview: {
-    marginVertical: 4,
     padding: 14,
     borderRadius: 12,
     borderWidth: 1,
@@ -2081,15 +1991,6 @@ const styles = StyleSheet.create({
   },
   draftContinueButtonText: {
     color: "#FFFFFF",
-    fontWeight: "700",
-  },
-  draftNewButton: {
-    borderWidth: 1,
-    borderColor: "#D64545",
-    backgroundColor: "#FFFFFF",
-  },
-  draftNewButtonText: {
-    color: "#D64545",
     fontWeight: "700",
   },
   draftCancelButton: {

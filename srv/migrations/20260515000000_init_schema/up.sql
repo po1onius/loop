@@ -105,10 +105,6 @@ ON events(creator_id, created_at DESC);
 CREATE INDEX idx_events_creator_id_updated_at
 ON events(creator_id, updated_at DESC);
 
-CREATE UNIQUE INDEX idx_events_one_draft_per_creator
-ON events(creator_id)
-WHERE status = 'draft';
-
 CREATE INDEX idx_events_cover_asset_id
 ON events(cover_asset_id)
 WHERE cover_asset_id IS NOT NULL;

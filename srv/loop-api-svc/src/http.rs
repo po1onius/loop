@@ -177,8 +177,6 @@ pub enum ErrorCode {
     AlreadyExist,
     AuthContextMissing,
     DbError,
-    DraftLocked,
-    DraftSessionExpired,
     EmailSendError,
     EventNotFound,
     InvalidInput,
@@ -212,8 +210,6 @@ impl ErrorCode {
             Self::AlreadyExist => "already_exist",
             Self::AuthContextMissing => "auth_context_missing",
             Self::DbError => "db_error",
-            Self::DraftLocked => "draft_locked",
-            Self::DraftSessionExpired => "draft_session_expired",
             Self::EmailSendError => "email_send_error",
             Self::EventNotFound => "event_not_found",
             Self::InvalidInput => "invalid_input",
@@ -255,8 +251,6 @@ pub mod err_key {
     pub const ALREADY_EXIST: ErrorCode = ErrorCode::AlreadyExist;
     pub const AUTH_CONTEXT_MISSING: ErrorCode = ErrorCode::AuthContextMissing;
     pub const DB_ERROR: ErrorCode = ErrorCode::DbError;
-    pub const DRAFT_LOCKED: ErrorCode = ErrorCode::DraftLocked;
-    pub const DRAFT_SESSION_EXPIRED: ErrorCode = ErrorCode::DraftSessionExpired;
     pub const EMAIL_SEND_ERROR: ErrorCode = ErrorCode::EmailSendError;
     pub const EVENT_NOT_FOUND: ErrorCode = ErrorCode::EventNotFound;
     pub const INVALID_INPUT: ErrorCode = ErrorCode::InvalidInput;
