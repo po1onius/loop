@@ -42,7 +42,7 @@ services:
       - otel-collector
 
   db:
-    container_name: pgsql
+    container_name: loop-pgsql
     image: docker.io/postgres:18.4
     shm_size: 128mb
     environment:
@@ -84,7 +84,7 @@ services:
         echo "Diesel migration 执行完成"
 
   cache:
-    container_name: redis
+    container_name: loop-redis
     image: docker.io/redis:8.2.7
     command:
       - redis-server
