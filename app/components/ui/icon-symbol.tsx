@@ -28,6 +28,7 @@ const MAPPING = {
   "list.bullet.rectangle": "event-note",
   "doc.text": "article",
   "square.and.pencil": "edit",
+  trash: "delete-outline",
   "chevron.left.forwardslash.chevron.right": "code",
   "chevron.right": "chevron-right",
 } as IconMapping;

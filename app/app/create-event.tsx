@@ -3,6 +3,7 @@ import * as ImagePicker from "expo-image-picker";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Keyboard,
   KeyboardAvoidingView,
   Modal,
@@ -25,6 +26,7 @@ import { IconSymbol } from "@/components/ui/icon-symbol";
 import type { EventContentDoc, EventResp, UpdateEventDraftRequest } from "@/lib/dto";
 import {
   createEventDraft,
+  deleteEventDraft,
   listAllMyEventDrafts,
   publishEventDraft,
   updateEventDraft,
@@ -119,6 +121,7 @@ export default function CreateEventScreen() {
   const draftWorkCountRef = useRef(0);
   const draftOpenedRef = useRef(false);
   const draftEventIdRef = useRef<string | null>(null);
+  const deletingDraftIdRef = useRef<string | null>(null);
   const lastContentDocRef = useRef<EventContentDoc>(createEmptyContentDoc());
   const pendingEditorContentRef = useRef<EventContentDoc | null>(null);
   const savedDraftHashRef = useRef("");
@@ -148,6 +151,8 @@ export default function CreateEventScreen() {
   const [draftEntryState, setDraftEntryState] =
     useState<DraftEntryState>("checking");
   const [existingDrafts, setExistingDrafts] = useState<EventResp[]>([]);
+  const [deletingDraftId, setDeletingDraftId] = useState<string | null>(null);
+  const [draftDeleteError, setDraftDeleteError] = useState("");
 
   useEffect(() => {
     mountedRef.current = true;
@@ -252,6 +257,7 @@ export default function CreateEventScreen() {
     (draft: EventResp | null) => {
       setDraftEntryState("opening");
       setError("");
+      setDraftDeleteError("");
       setStatus(draft ? "正在加载草稿..." : "正在新建活动...");
       console.info("[create-event] draft entry selected", {
         eventId: draft?.event_id ?? null,
@@ -271,6 +277,7 @@ export default function CreateEventScreen() {
     setDraftEntryState("checking");
     setExistingDrafts([]);
     setError("");
+    setDraftDeleteError("");
     setStatus("正在检查活动草稿...");
 
     try {
@@ -310,6 +317,94 @@ export default function CreateEventScreen() {
   useEffect(() => {
     void inspectDraftEntry();
   }, [inspectDraftEntry]);
+
+  const deleteDraft = useCallback(
+    async (draft: EventResp) => {
+      const eventId = draft.event_id;
+      // 同一时间只允许一个删除请求，避免用户连续点击后列表状态和请求结果交错。
+      if (deletingDraftIdRef.current) {
+        console.info("[create-event] ignored duplicate draft delete request", {
+          eventId,
+          deletingEventId: deletingDraftIdRef.current,
+        });
+        return;
+      }
+
+      deletingDraftIdRef.current = eventId;
+      setDeletingDraftId(eventId);
+      setDraftDeleteError("");
+      console.info("[create-event] deleting draft from entry list", {
+        eventId,
+        titleLength: draft.title.trim().length,
+      });
+
+      try {
+        await deleteEventDraft(eventId);
+        if (!mountedRef.current) {
+          return;
+        }
+
+        const remainingDrafts = existingDrafts.filter(
+          (item) => item.event_id !== eventId,
+        );
+        console.info("[create-event] draft removed from entry list", {
+          eventId,
+          remainingDraftCount: remainingDrafts.length,
+        });
+
+        if (remainingDrafts.length === 0) {
+          // 删除最后一份草稿后已没有可选项，直接打开空白编辑器。
+          openDraftForEditing(null);
+          return;
+        }
+        setExistingDrafts(remainingDrafts);
+      } catch (deleteError) {
+        if (!mountedRef.current) {
+          return;
+        }
+        const message =
+          deleteError instanceof Error ? deleteError.message : "草稿删除失败";
+        console.warn("[create-event] draft delete failed", {
+          eventId,
+          reason: message,
+        });
+        setDraftDeleteError(message);
+      } finally {
+        if (deletingDraftIdRef.current === eventId) {
+          deletingDraftIdRef.current = null;
+        }
+        if (mountedRef.current) {
+          setDeletingDraftId(null);
+        }
+      }
+    },
+    [existingDrafts, openDraftForEditing],
+  );
+
+  const requestDeleteDraft = useCallback(
+    (draft: EventResp) => {
+      if (deletingDraftIdRef.current) {
+        return;
+      }
+      const draftName = draft.title.trim() || "未命名草稿";
+      console.info("[create-event] requesting draft delete confirmation", {
+        eventId: draft.event_id,
+      });
+      Alert.alert(
+        "删除草稿",
+        `确定删除“${draftName}”吗？删除后无法恢复。`,
+        [
+          { text: "取消", style: "cancel" },
+          {
+            text: "删除",
+            style: "destructive",
+            onPress: () => void deleteDraft(draft),
+          },
+        ],
+      );
+    },
+    [deleteDraft],
+  );
 
   const applyDateTime = useCallback(
     (target: DateTimePickerTarget, value: Date) => {
@@ -1176,7 +1271,10 @@ export default function CreateEventScreen() {
             state={draftEntryState}
             drafts={existingDrafts}
             error={error}
+            deleteError={draftDeleteError}
+            deletingDraftId={deletingDraftId}
             onSelect={openDraftForEditing}
+            onDelete={requestDeleteDraft}
             onNew={() => openDraftForEditing(null)}
             onRetry={() => void inspectDraftEntry()}
             onCancel={() => router.back()}
@@ -1191,7 +1289,10 @@ function DraftEntryModal({
   state,
   drafts,
   error,
+  deleteError,
+  deletingDraftId,
   onSelect,
+  onDelete,
   onNew,
   onRetry,
   onCancel,
@@ -1199,7 +1300,10 @@ function DraftEntryModal({
   state: DraftEntryState;
   drafts: EventResp[];
   error: string;
+  deleteError: string;
+  deletingDraftId: string | null;
   onSelect: (draft: EventResp) => void;
+  onDelete: (draft: EventResp) => void;
   onNew: () => void;
   onRetry: () => void;
   onCancel: () => void;
@@ -1233,30 +1337,71 @@ function DraftEntryModal({
               <ThemedText style={styles.draftEntryDescription}>
                 选择草稿只会把已保存内容填入编辑器，修改后点击“存草稿”才会覆盖保存。
               </ThemedText>
+              {deleteError ? (
+                <ThemedText
+                  accessibilityRole="alert"
+                  style={[styles.draftDeleteError, styles.errorText]}
+                >
+                  {deleteError}
+                </ThemedText>
+              ) : null}
               <ScrollView
                 style={styles.draftList}
                 contentContainerStyle={styles.draftListContent}
                 showsVerticalScrollIndicator={false}
               >
                 {drafts.map((draft, index) => (
-                  <Pressable
+                  <View
                     key={draft.event_id}
-                    accessibilityRole="button"
-                    accessibilityHint="把这份草稿内容填入活动编辑器"
-                    onPress={() => onSelect(draft)}
                     style={styles.draftPreview}
                   >
-                    <ThemedText
-                      type="defaultSemiBold"
-                      numberOfLines={2}
-                      style={styles.draftPreviewTitle}
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityHint="把这份草稿内容填入活动编辑器"
+                      disabled={deletingDraftId !== null}
+                      onPress={() => onSelect(draft)}
+                      style={({ pressed }) => [
+                        styles.draftPreviewContent,
+                        pressed ? styles.draftPreviewPressed : undefined,
+                        deletingDraftId !== null
+                          ? styles.draftPreviewDisabled
+                          : undefined,
+                      ]}
                     >
-                      {draft.title.trim() || `草稿${index + 1}`}
-                    </ThemedText>
-                    <ThemedText style={styles.draftPreviewMeta}>
-                      保存于 {formatDraftUpdatedAt(draft.updated_at)}
-                    </ThemedText>
-                  </Pressable>
+                      <ThemedText
+                        type="defaultSemiBold"
+                        numberOfLines={2}
+                        style={styles.draftPreviewTitle}
+                      >
+                        {draft.title.trim() || `草稿${index + 1}`}
+                      </ThemedText>
+                      <ThemedText style={styles.draftPreviewMeta}>
+                        保存于 {formatDraftUpdatedAt(draft.updated_at)}
+                      </ThemedText>
+                    </Pressable>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={`删除${draft.title.trim() || `草稿${index + 1}`}`}
+                      accessibilityHint="永久删除这份活动草稿"
+                      hitSlop={6}
+                      disabled={deletingDraftId !== null}
+                      onPress={() => onDelete(draft)}
+                      style={({ pressed }) => [
+                        styles.draftDeleteButton,
+                        pressed ? styles.draftDeleteButtonPressed : undefined,
+                        deletingDraftId !== null &&
+                        deletingDraftId !== draft.event_id
+                          ? styles.draftDeleteButtonDisabled
+                          : undefined,
+                      ]}
+                    >
+                      {deletingDraftId === draft.event_id ? (
+                        <ActivityIndicator size="small" color="#D64545" />
+                      ) : (
+                        <IconSymbol size={21} name="trash" color="#D64545" />
+                      )}
+                    </Pressable>
+                  </View>
                 ))}
               </ScrollView>
               <Pressable
@@ -1956,6 +2101,11 @@ const styles = StyleSheet.create({
     lineHeight: 21,
     textAlign: "center",
   },
+  draftDeleteError: {
+    fontSize: 13,
+    lineHeight: 18,
+    textAlign: "center",
+  },
   draftList: {
     maxHeight: 320,
   },
@@ -1964,12 +2114,28 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
   },
   draftPreview: {
-    padding: 14,
+    minHeight: 68,
     borderRadius: 12,
     borderWidth: 1,
     borderColor: "#D9E0EA",
     backgroundColor: "#F6F8FB",
+    flexDirection: "row",
+    alignItems: "stretch",
+    overflow: "hidden",
+  },
+  draftPreviewContent: {
+    flex: 1,
+    paddingLeft: 14,
+    paddingRight: 8,
+    paddingVertical: 12,
+    justifyContent: "center",
     gap: 5,
+  },
+  draftPreviewPressed: {
+    backgroundColor: "#EAF0F7",
+  },
+  draftPreviewDisabled: {
+    opacity: 0.62,
   },
   draftPreviewTitle: {
     color: "#11181C",
@@ -1978,6 +2144,17 @@ const styles = StyleSheet.create({
     color: "#687076",
     fontSize: 12,
     lineHeight: 17,
+  },
+  draftDeleteButton: {
+    width: 48,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  draftDeleteButtonPressed: {
+    backgroundColor: "#FDECEC",
+  },
+  draftDeleteButtonDisabled: {
+    opacity: 0.4,
   },
   draftEntryButton: {
     minHeight: 46,
