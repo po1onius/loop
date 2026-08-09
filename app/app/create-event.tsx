@@ -11,6 +11,7 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  Switch,
   TextInput,
   View,
 } from "react-native";
@@ -140,6 +141,7 @@ export default function CreateEventScreen() {
   const [locationName, setLocationName] = useState("");
   const [locationAddress, setLocationAddress] = useState("");
   const [capacityText, setCapacityText] = useState("");
+  const [requiresApproval, setRequiresApproval] = useState(false);
   const [tagText, setTagText] = useState("");
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
@@ -234,6 +236,7 @@ export default function CreateEventScreen() {
           ? String(event.capacity)
           : "",
       );
+      setRequiresApproval(event?.requires_approval ?? false);
       setTagText(event?.tags.join(" ") ?? "");
       setDraftOpened(true);
       setError("");
@@ -603,6 +606,7 @@ export default function CreateEventScreen() {
         locationName,
         locationAddress,
         capacityText,
+        requiresApproval,
         tagText,
       });
       const draftHash = draftRequestHash(req);
@@ -649,6 +653,7 @@ export default function CreateEventScreen() {
       endDraftWork,
       locationAddress,
       locationName,
+      requiresApproval,
       startAt,
       tagText,
       title,
@@ -667,6 +672,7 @@ export default function CreateEventScreen() {
           locationName,
           locationAddress,
           capacityText,
+          requiresApproval,
           tagText,
         });
         validatePublishRequest(req, textLength, imageCount);
@@ -705,6 +711,7 @@ export default function CreateEventScreen() {
       endAt,
       locationAddress,
       locationName,
+      requiresApproval,
       saveDraft,
       startAt,
       tagText,
@@ -1216,6 +1223,27 @@ export default function CreateEventScreen() {
                 editable={draftOpened}
                 onChangeText={setTagText}
               />
+              <View style={styles.approvalSetting}>
+                <View style={styles.approvalSettingText}>
+                  <ThemedText type="defaultSemiBold">加入活动需要审核</ThemedText>
+                  <ThemedText style={styles.approvalSettingDescription}>
+                    开启后，用户提交加入申请，需要你同意后才会正式加入。
+                  </ThemedText>
+                </View>
+                <Switch
+                  accessibilityLabel="加入活动需要审核"
+                  value={requiresApproval}
+                  disabled={!draftOpened || busy}
+                  onValueChange={(value) => {
+                    console.info("[create-event] approval requirement changed", {
+                      requiresApproval: value,
+                    });
+                    setRequiresApproval(value);
+                  }}
+                  trackColor={{ false: "#CDD3DD", true: "#8CCBDD" }}
+                  thumbColor={requiresApproval ? "#0A7EA4" : "#F8FAFC"}
+                />
+              </View>
             </ScrollView>
 
             <View
@@ -1536,6 +1564,7 @@ function buildDraftUpdateRequest({
   locationName,
   locationAddress,
   capacityText,
+  requiresApproval,
   tagText,
 }: {
   title: string;
@@ -1545,6 +1574,7 @@ function buildDraftUpdateRequest({
   locationName: string;
   locationAddress: string;
   capacityText: string;
+  requiresApproval: boolean;
   tagText: string;
 }): UpdateEventDraftRequest {
   if (startAt && endAt && endAt.getTime() <= startAt.getTime()) {
@@ -1559,6 +1589,7 @@ function buildDraftUpdateRequest({
     location_name: emptyToNull(locationName),
     location_address: emptyToNull(locationAddress),
     capacity: parseCapacity(capacityText),
+    requires_approval: requiresApproval,
     tags: parseTags(tagText),
   };
 }
@@ -1610,6 +1641,7 @@ function eventToDraftUpdateRequest(
     location_name: event.location_name,
     location_address: event.location_address,
     capacity: event.capacity,
+    requires_approval: event.requires_approval,
     tags: event.tags,
   };
 }
@@ -2049,6 +2081,27 @@ const styles = StyleSheet.create({
     minHeight: 48,
     fontSize: 17,
     fontWeight: "600",
+  },
+  approvalSetting: {
+    minHeight: 72,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#CDD3DD",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: "#FFFFFF",
+  },
+  approvalSettingText: {
+    flex: 1,
+    gap: 3,
+  },
+  approvalSettingDescription: {
+    color: "#687076",
+    fontSize: 12,
+    lineHeight: 17,
   },
   editorFrame: {
     flex: 1,

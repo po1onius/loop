@@ -3,6 +3,7 @@ import { router } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Animated,
+  ActivityIndicator,
   Easing,
   FlatList,
   Modal,
@@ -18,8 +19,9 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { ThemedText } from "@/components/themed-text";
 import { ThemedView } from "@/components/themed-view";
 import { IconSymbol } from "@/components/ui/icon-symbol";
+import { hasAccessToken } from "@/lib/api-client";
 import type { EventResp } from "@/lib/dto";
-import { listEvents } from "@/lib/event-api";
+import { listEvents, listMyEvents, listMyJoinedEvents } from "@/lib/event-api";
 
 type CarouselItem = {
   id: string;
@@ -42,6 +44,13 @@ type DrawerItem = {
 };
 
 type EventLoadMode = "background" | "refresh";
+type EventListFilter = "recent" | "published" | "joined";
+
+const EVENT_LIST_FILTERS: { id: EventListFilter; label: string }[] = [
+  { id: "recent", label: "近期活动" },
+  { id: "published", label: "我发布的" },
+  { id: "joined", label: "我参加的" },
+];
 
 const CAROUSEL_ITEMS: CarouselItem[] = [
   {
@@ -119,6 +128,9 @@ export default function HomeScreen() {
   const [activeIndex, setActiveIndex] = useState(0);
   const [drawerVisible, setDrawerVisible] = useState(false);
   const [events, setEvents] = useState<EventResp[]>([]);
+  const [eventListFilter, setEventListFilter] =
+    useState<EventListFilter>("recent");
+  const [loadingEvents, setLoadingEvents] = useState(false);
   const [refreshingEvents, setRefreshingEvents] = useState(false);
   const [eventsError, setEventsError] = useState("");
   const slideWidth = Math.max(width - 32, 1);
@@ -130,19 +142,31 @@ export default function HomeScreen() {
     if (mode === "refresh") {
       activeRefreshRequestIdRef.current = requestId;
       setRefreshingEvents(true);
+    } else {
+      setLoadingEvents(true);
     }
     setEventsError("");
     try {
-      console.info("[home] loading events", { mode, requestId });
-      const resp = await listEvents();
+      console.info("[home] loading events", {
+        mode,
+        requestId,
+        filter: eventListFilter,
+      });
+      const resp = await loadEventList(eventListFilter);
       if (latestEventsRequestIdRef.current !== requestId) {
         console.info("[home] ignored stale events response", {
           mode,
           requestId,
+          filter: eventListFilter,
         });
         return;
       }
       setEvents(resp.items);
+      console.info("[home] events loaded", {
+        requestId,
+        filter: eventListFilter,
+        count: resp.items.length,
+      });
     } catch (e) {
       if (latestEventsRequestIdRef.current !== requestId) {
         return;
@@ -156,8 +180,11 @@ export default function HomeScreen() {
         activeRefreshRequestIdRef.current = null;
         setRefreshingEvents(false);
       }
+      if (latestEventsRequestIdRef.current === requestId) {
+        setLoadingEvents(false);
+      }
     }
-  }, []);
+  }, [eventListFilter]);
 
   useFocusEffect(
     useCallback(() => {
@@ -167,6 +194,7 @@ export default function HomeScreen() {
         latestEventsRequestIdRef.current += 1;
         activeRefreshRequestIdRef.current = null;
         setRefreshingEvents(false);
+        setLoadingEvents(false);
       };
     }, [loadEvents]),
   );
@@ -174,6 +202,30 @@ export default function HomeScreen() {
   const handleRefreshEvents = useCallback(() => {
     void loadEvents("refresh");
   }, [loadEvents]);
+
+  const handleEventFilterPress = useCallback(
+    (nextFilter: EventListFilter) => {
+      if (nextFilter === eventListFilter) {
+        return;
+      }
+      if (nextFilter !== "recent" && !hasAccessToken()) {
+        console.info("[home] personal event filter requires login", {
+          filter: nextFilter,
+        });
+        router.push("/login");
+        return;
+      }
+      console.info("[home] event filter changed", {
+        from: eventListFilter,
+        to: nextFilter,
+      });
+      // 先清空上一筛选的结果，避免请求期间把“近期活动”误显示成个人活动。
+      setEvents([]);
+      setEventsError("");
+      setEventListFilter(nextFilter);
+    },
+    [eventListFilter],
+  );
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -204,7 +256,7 @@ export default function HomeScreen() {
   }, [drawerTranslateX, drawerVisible, drawerWidth]);
 
   const listItems = useMemo(() => {
-    if (!events.length) {
+    if (!events.length && eventListFilter === "recent") {
       return FALLBACK_ITEMS;
     }
     return events.map((event) => ({
@@ -213,7 +265,7 @@ export default function HomeScreen() {
       id: event.event_id,
       title: event.title,
     }));
-  }, [events]);
+  }, [eventListFilter, events]);
 
   const handleCarouselScrollEnd = (
     event: NativeSyntheticEvent<NativeScrollEvent>,
@@ -319,7 +371,33 @@ export default function HomeScreen() {
         <ThemedView style={styles.bottomSection}>
           <View style={styles.sectionHeader}>
             <ThemedView style={styles.sectionTitleWrap}>
-              <ThemedText type="subtitle">近期活动</ThemedText>
+              <View accessibilityRole="tablist" style={styles.eventFilterBar}>
+                {EVENT_LIST_FILTERS.map((filter) => {
+                  const selected = filter.id === eventListFilter;
+                  return (
+                    <Pressable
+                      key={filter.id}
+                      accessibilityRole="tab"
+                      accessibilityState={{ selected }}
+                      onPress={() => handleEventFilterPress(filter.id)}
+                      style={[
+                        styles.eventFilterButton,
+                        selected ? styles.eventFilterButtonActive : undefined,
+                      ]}
+                    >
+                      <ThemedText
+                        numberOfLines={1}
+                        style={[
+                          styles.eventFilterText,
+                          selected ? styles.eventFilterTextActive : undefined,
+                        ]}
+                      >
+                        {filter.label}
+                      </ThemedText>
+                    </Pressable>
+                  );
+                })}
+              </View>
               {eventsError ? (
                 <ThemedText style={styles.errorText}>{eventsError}</ThemedText>
               ) : null}
@@ -341,6 +419,12 @@ export default function HomeScreen() {
             contentContainerStyle={styles.listContent}
             refreshing={refreshingEvents}
             onRefresh={handleRefreshEvents}
+            ListEmptyComponent={
+              <EventListEmptyState
+                filter={eventListFilter}
+                loading={loadingEvents}
+              />
+            }
             renderItem={({ item }) => (
               <Pressable
                 accessibilityRole="button"
@@ -381,6 +465,46 @@ export default function HomeScreen() {
         />
       </ThemedView>
     </SafeAreaView>
+  );
+}
+
+async function loadEventList(filter: EventListFilter) {
+  switch (filter) {
+    case "published":
+      return listMyEvents("published");
+    case "joined":
+      return listMyJoinedEvents();
+    case "recent":
+      return listEvents();
+  }
+}
+
+function EventListEmptyState({
+  filter,
+  loading,
+}: {
+  filter: EventListFilter;
+  loading: boolean;
+}) {
+  if (loading) {
+    return (
+      <View style={styles.eventEmptyState}>
+        <ActivityIndicator color="#0A7EA4" />
+        <ThemedText style={styles.eventEmptyText}>正在加载活动...</ThemedText>
+      </View>
+    );
+  }
+  return (
+    <View style={styles.eventEmptyState}>
+      <ThemedText type="defaultSemiBold">
+        {filter === "published" ? "还没有发布活动" : "还没有参加活动"}
+      </ThemedText>
+      <ThemedText style={styles.eventEmptyText}>
+        {filter === "published"
+          ? "点击右侧“发布”创建第一个活动"
+          : "正式加入活动后会显示在这里"}
+      </ThemedText>
+    </View>
   );
 }
 
@@ -556,6 +680,30 @@ const styles = StyleSheet.create({
   sectionTitleWrap: {
     flex: 1,
   },
+  eventFilterBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  eventFilterButton: {
+    minHeight: 34,
+    justifyContent: "center",
+    borderRadius: 9,
+    paddingHorizontal: 8,
+  },
+  eventFilterButtonActive: {
+    backgroundColor: "#EAF6FA",
+  },
+  eventFilterText: {
+    color: "#687076",
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: "600",
+  },
+  eventFilterTextActive: {
+    color: "#0A7EA4",
+    fontWeight: "800",
+  },
   createButton: {
     height: 38,
     flexDirection: "row",
@@ -584,6 +732,17 @@ const styles = StyleSheet.create({
   listContent: {
     paddingBottom: 24,
     gap: 10,
+  },
+  eventEmptyState: {
+    minHeight: 150,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingHorizontal: 24,
+  },
+  eventEmptyText: {
+    color: "#687076",
+    textAlign: "center",
   },
   listPressable: {
     borderRadius: 12,

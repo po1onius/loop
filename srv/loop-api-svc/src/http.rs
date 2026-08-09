@@ -178,6 +178,8 @@ pub enum ErrorCode {
     AuthContextMissing,
     DbError,
     EmailSendError,
+    EventCapacityReached,
+    EventJoinRequestNotFound,
     EventNotFound,
     InvalidInput,
     InvalidRefreshToken,
@@ -211,6 +213,8 @@ impl ErrorCode {
             Self::AuthContextMissing => "auth_context_missing",
             Self::DbError => "db_error",
             Self::EmailSendError => "email_send_error",
+            Self::EventCapacityReached => "event_capacity_reached",
+            Self::EventJoinRequestNotFound => "event_join_request_not_found",
             Self::EventNotFound => "event_not_found",
             Self::InvalidInput => "invalid_input",
             Self::InvalidRefreshToken => "invalid_refresh_token",
@@ -252,6 +256,8 @@ pub mod err_key {
     pub const AUTH_CONTEXT_MISSING: ErrorCode = ErrorCode::AuthContextMissing;
     pub const DB_ERROR: ErrorCode = ErrorCode::DbError;
     pub const EMAIL_SEND_ERROR: ErrorCode = ErrorCode::EmailSendError;
+    pub const EVENT_CAPACITY_REACHED: ErrorCode = ErrorCode::EventCapacityReached;
+    pub const EVENT_JOIN_REQUEST_NOT_FOUND: ErrorCode = ErrorCode::EventJoinRequestNotFound;
     pub const EVENT_NOT_FOUND: ErrorCode = ErrorCode::EventNotFound;
     pub const INVALID_INPUT: ErrorCode = ErrorCode::InvalidInput;
     pub const INVALID_REFRESH_TOKEN: ErrorCode = ErrorCode::InvalidRefreshToken;

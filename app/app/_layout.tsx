@@ -49,6 +49,10 @@ export default function RootLayout() {
         <Stack.Screen name="register" options={{ headerShown: false }} />
         <Stack.Screen name="create-event" options={{ headerShown: false }} />
         <Stack.Screen name="event/[eventId]" options={{ headerShown: false }} />
+        <Stack.Screen
+          name="event/[eventId]/join-requests"
+          options={{ headerShown: false }}
+        />
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen
           name="modal"

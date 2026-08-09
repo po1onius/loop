@@ -12,17 +12,23 @@ use diesel_async::AsyncConnection;
 use http::{Method, StatusCode};
 use loop_dto::{
     CreateEventDraftRequest, CreateEventRequest, EVENT_CONTENT_VERSION_V1, EventContentBlock,
-    EventContentDoc, EventContentImage, EventFeatureBlock, EventInlineNode, EventResp, EventStatus,
-    EventTextMark, ListEventsResp, UpdateEventDraftRequest,
+    EventContentDoc, EventContentImage, EventFeatureBlock, EventInlineNode, EventJoinRequestResp,
+    EventJoinReviewDecision, EventParticipationResp, EventParticipationStateResp,
+    EventParticipationStatus, EventResp, EventStatus, EventTextMark, ListEventJoinRequestsResp,
+    ListEventsResp, ReviewEventJoinRequest, UpdateEventDraftRequest,
 };
 use loop_svc_model::{
     DieselConn,
-    event::{Event, EventDraftChanges, MediaAsset, NewEvent, PublishEventDraftChanges},
+    event::{
+        Event, EventDraftChanges, EventParticipation, MediaAsset, NewEvent, NewEventParticipation,
+        PublishEventDraftChanges,
+    },
 };
 use serde::Deserialize;
 use std::collections::HashSet;
 
 const EVENT_CREATE_PERMISSION: &str = "event.create";
+const EVENT_JOIN_PERMISSION: &str = "event.join";
 const DEFAULT_LIST_LIMIT: i32 = 20;
 const MAX_LIST_LIMIT: i32 = 50;
 const MAX_TITLE_CHARS: usize = 80;
@@ -69,6 +75,7 @@ struct NormalizedEventDraft {
     location_name: Option<String>,
     location_address: Option<String>,
     capacity: Option<i32>,
+    requires_approval: bool,
 }
 
 // 发布、首次保存和覆盖保存共享同一套规范化逻辑。用具名载荷承载原始字段，
@@ -81,6 +88,7 @@ struct RawEventPayload {
     location_name: Option<String>,
     location_address: Option<String>,
     capacity: Option<i32>,
+    requires_approval: bool,
     tags: Vec<String>,
     mode: ContentValidationMode,
 }
@@ -278,6 +286,49 @@ pub async fn list_owned_events(
 }
 
 #[tracing::instrument(
+    name = "event.joined.list",
+    skip_all,
+    fields(user.id = auth.user_id)
+)]
+pub async fn list_joined_events(
+    State(_state): State<crate::http::AppState>,
+    auth: AuthInfo,
+    Query(query): Query<ListEventsQuery>,
+) -> Result<Json<ListEventsResp>, HttpErr> {
+    let limit = query
+        .limit
+        .unwrap_or(DEFAULT_LIST_LIMIT)
+        .clamp(1, MAX_LIST_LIMIT);
+    let offset = query.offset.unwrap_or(0).max(0);
+    let rows = Event::select_joined_by_user(
+        auth.user_id,
+        i64::from(limit),
+        i64::from(offset),
+        &mut db_conn!(),
+    )
+    .await
+    .internal(DB_ERROR)?;
+    let has_next = rows.len() == limit as usize;
+    let items = rows
+        .into_iter()
+        .map(to_event_resp)
+        .collect::<Result<Vec<_>, _>>()?;
+
+    tracing::info!(
+        event = "event.joined_list_loaded",
+        user_id = auth.user_id,
+        item_count = items.len(),
+        limit,
+        offset,
+        "joined event list loaded"
+    );
+    Ok(Json(ListEventsResp {
+        items,
+        next_offset: has_next.then_some(offset + limit),
+    }))
+}
+
+#[tracing::instrument(
     name = "event.get",
     skip_all,
     fields(event.id = %event_id)
@@ -301,6 +352,323 @@ pub async fn get_event(
     );
 
     Ok(Json(to_event_resp(event)?))
+}
+
+#[tracing::instrument(
+    name = "event.participation.get",
+    skip_all,
+    fields(user.id = auth.user_id, event.id = %event_id)
+)]
+pub async fn get_event_participation(
+    State(_state): State<crate::http::AppState>,
+    auth: AuthInfo,
+    Path(event_id): Path<String>,
+) -> Result<Json<EventParticipationStateResp>, HttpErr> {
+    let event_id = parse_event_id(&event_id)?;
+    let mut conn = db_conn!();
+    let event = Event::select_published_by_id(event_id, &mut conn)
+        .await
+        .internal(DB_ERROR)?
+        .ok_or_else(|| HttpErr::client(StatusCode::NOT_FOUND, EVENT_NOT_FOUND))?;
+    let participation = EventParticipation::select(event_id, auth.user_id, &mut conn)
+        .await
+        .internal(DB_ERROR)?
+        .map(to_event_participation_resp)
+        .transpose()?;
+    let is_creator = event.creator_id == auth.user_id;
+
+    tracing::info!(
+        event = "event.participation_state_loaded",
+        event_id,
+        user_id = auth.user_id,
+        is_creator,
+        participation_status = participation
+            .as_ref()
+            .map(|item| participation_status_name(&item.status))
+            .unwrap_or("none"),
+        "event participation state loaded"
+    );
+    Ok(Json(EventParticipationStateResp {
+        is_creator,
+        participation,
+    }))
+}
+
+#[tracing::instrument(
+    name = "event.join",
+    skip_all,
+    fields(user.id = auth.user_id, event.id = %event_id, participation.status = tracing::field::Empty)
+)]
+pub async fn join_event(
+    State(_state): State<crate::http::AppState>,
+    auth: AuthInfo,
+    Path(event_id): Path<String>,
+) -> Result<Json<EventParticipationResp>, HttpErr> {
+    let event_id = parse_event_id(&event_id)?;
+    let mut conn = db_conn!();
+    let participation = conn
+        .transaction::<EventParticipation, HttpErr, _>(async |conn| {
+            let event = Event::select_published_by_id_for_update(event_id, conn)
+                .await
+                .internal(DB_ERROR)?
+                .ok_or_else(|| HttpErr::client(StatusCode::NOT_FOUND, EVENT_NOT_FOUND))?;
+            if event.creator_id == auth.user_id {
+                tracing::warn!(
+                    event = "event.join_creator_rejected",
+                    event_id,
+                    user_id = auth.user_id,
+                    "event creator cannot join their own event"
+                );
+                return Err(HttpErr::client(StatusCode::BAD_REQUEST, INVALID_INPUT));
+            }
+
+            if let Some(existing) = EventParticipation::select(event_id, auth.user_id, conn)
+                .await
+                .internal(DB_ERROR)?
+            {
+                // pending/joined 的重复请求直接返回现有状态；被拒绝后允许用户重新申请。
+                if existing.status != "rejected" {
+                    return Ok(existing);
+                }
+                let now = Utc::now();
+                let next_status = if event.requires_approval {
+                    "pending"
+                } else {
+                    ensure_event_capacity_available(&event, conn).await?;
+                    "joined"
+                };
+                let joined_at = (next_status == "joined").then_some(now);
+                return EventParticipation::reapply(
+                    event_id,
+                    auth.user_id,
+                    next_status,
+                    now,
+                    joined_at,
+                    conn,
+                )
+                .await
+                .internal(DB_ERROR);
+            }
+
+            let now = Utc::now();
+            let status = if event.requires_approval {
+                "pending"
+            } else {
+                ensure_event_capacity_available(&event, conn).await?;
+                "joined"
+            };
+            EventParticipation::insert(
+                NewEventParticipation {
+                    event_id,
+                    user_id: auth.user_id,
+                    status: status.to_string(),
+                    requested_at: now,
+                    reviewed_at: None,
+                    reviewed_by: None,
+                    joined_at: (status == "joined").then_some(now),
+                },
+                conn,
+            )
+            .await
+            .internal(DB_ERROR)
+        })
+        .await?;
+
+    tracing::Span::current().record("participation.status", &participation.status);
+    tracing::info!(
+        event = "event.join_completed",
+        event_id,
+        user_id = auth.user_id,
+        participation_status = %participation.status,
+        "event join request completed"
+    );
+    Ok(Json(to_event_participation_resp(participation)?))
+}
+
+#[tracing::instrument(
+    name = "event.join_requests.list",
+    skip_all,
+    fields(user.id = auth.user_id, event.id = %event_id)
+)]
+pub async fn list_event_join_requests(
+    State(_state): State<crate::http::AppState>,
+    auth: AuthInfo,
+    Path(event_id): Path<String>,
+) -> Result<Json<ListEventJoinRequestsResp>, HttpErr> {
+    let event_id = parse_event_id(&event_id)?;
+    let mut conn = db_conn!();
+    let event = Event::select_owned_by_id(event_id, auth.user_id, &mut conn)
+        .await
+        .internal(DB_ERROR)?
+        .filter(|event| event.status == "published")
+        .ok_or_else(|| HttpErr::client(StatusCode::NOT_FOUND, EVENT_NOT_FOUND))?;
+    let rows = EventParticipation::list_pending_applicants(event.event_id, &mut conn)
+        .await
+        .internal(DB_ERROR)?;
+    let items = rows
+        .into_iter()
+        .map(|row| {
+            Ok(EventJoinRequestResp {
+                user_id: row.participation.user_id.to_string(),
+                username: row.username,
+                status: to_event_participation_status(&row.participation.status)?,
+                requested_at: row.participation.requested_at.to_rfc3339(),
+                reviewed_at: row
+                    .participation
+                    .reviewed_at
+                    .map(|value| value.to_rfc3339()),
+            })
+        })
+        .collect::<Result<Vec<_>, HttpErr>>()?;
+
+    tracing::info!(
+        event = "event.join_requests_loaded",
+        event_id,
+        user_id = auth.user_id,
+        pending_count = items.len(),
+        "pending event join requests loaded"
+    );
+    Ok(Json(ListEventJoinRequestsResp { items }))
+}
+
+#[tracing::instrument(
+    name = "event.join_request.review",
+    skip_all,
+    fields(
+        user.id = auth.user_id,
+        event.id = %event_id,
+        applicant.id = %applicant_id,
+        participation.status = tracing::field::Empty,
+    )
+)]
+pub async fn review_event_join_request(
+    State(_state): State<crate::http::AppState>,
+    auth: AuthInfo,
+    Path((event_id, applicant_id)): Path<(String, String)>,
+    Json(req): Json<ReviewEventJoinRequest>,
+) -> Result<Json<EventParticipationResp>, HttpErr> {
+    let event_id = parse_event_id(&event_id)?;
+    let applicant_id = parse_user_id(&applicant_id)?;
+    let mut conn = db_conn!();
+    let participation = conn
+        .transaction::<EventParticipation, HttpErr, _>(async |conn| {
+            let event = Event::select_published_by_id_for_update(event_id, conn)
+                .await
+                .internal(DB_ERROR)?
+                .filter(|event| event.creator_id == auth.user_id)
+                .ok_or_else(|| HttpErr::client(StatusCode::NOT_FOUND, EVENT_NOT_FOUND))?;
+            let existing = EventParticipation::select(event_id, applicant_id, conn)
+                .await
+                .internal(DB_ERROR)?
+                .ok_or_else(|| {
+                    HttpErr::client(StatusCode::NOT_FOUND, EVENT_JOIN_REQUEST_NOT_FOUND)
+                })?;
+
+            // 对相同最终状态的审核请求保持幂等；不允许用审核接口移除已加入成员，
+            // 也不允许直接翻转一条已拒绝记录，用户需要重新提交申请。
+            match (&req.decision, existing.status.as_str()) {
+                (EventJoinReviewDecision::Approve, "joined")
+                | (EventJoinReviewDecision::Reject, "rejected") => return Ok(existing),
+                (_, "pending") => {}
+                _ => return Err(HttpErr::client(StatusCode::CONFLICT, INVALID_INPUT)),
+            }
+
+            let (status, joined_at) = match req.decision {
+                EventJoinReviewDecision::Approve => {
+                    ensure_event_capacity_available(&event, conn).await?;
+                    let now = Utc::now();
+                    ("joined", Some(now))
+                }
+                EventJoinReviewDecision::Reject => ("rejected", None),
+            };
+            EventParticipation::review_pending(
+                event_id,
+                applicant_id,
+                auth.user_id,
+                status,
+                Utc::now(),
+                joined_at,
+                conn,
+            )
+            .await
+            .map_err(|err| match err {
+                diesel::result::Error::NotFound => {
+                    HttpErr::client(StatusCode::NOT_FOUND, EVENT_JOIN_REQUEST_NOT_FOUND)
+                }
+                err => HttpErr::internal(DB_ERROR, err),
+            })
+        })
+        .await?;
+
+    tracing::Span::current().record("participation.status", &participation.status);
+    tracing::info!(
+        event = "event.join_request_reviewed",
+        event_id,
+        applicant_id,
+        reviewer_id = auth.user_id,
+        participation_status = %participation.status,
+        "event join request reviewed"
+    );
+    Ok(Json(to_event_participation_resp(participation)?))
+}
+
+async fn ensure_event_capacity_available(
+    event: &Event,
+    conn: &mut DieselConn,
+) -> Result<(), HttpErr> {
+    let Some(capacity) = event.capacity else {
+        return Ok(());
+    };
+    let joined_count = EventParticipation::count_joined(event.event_id, conn)
+        .await
+        .internal(DB_ERROR)?;
+    if joined_count >= i64::from(capacity) {
+        tracing::warn!(
+            event = "event.capacity_reached",
+            event_id = event.event_id,
+            capacity,
+            joined_count,
+            "event join rejected because capacity was reached"
+        );
+        return Err(HttpErr::client(
+            StatusCode::CONFLICT,
+            EVENT_CAPACITY_REACHED,
+        ));
+    }
+    Ok(())
+}
+
+fn to_event_participation_resp(
+    participation: EventParticipation,
+) -> Result<EventParticipationResp, HttpErr> {
+    Ok(EventParticipationResp {
+        event_id: participation.event_id.to_string(),
+        user_id: participation.user_id.to_string(),
+        status: to_event_participation_status(&participation.status)?,
+        requested_at: participation.requested_at.to_rfc3339(),
+        reviewed_at: participation.reviewed_at.map(|value| value.to_rfc3339()),
+        joined_at: participation.joined_at.map(|value| value.to_rfc3339()),
+    })
+}
+
+fn to_event_participation_status(value: &str) -> Result<EventParticipationStatus, HttpErr> {
+    match value {
+        "pending" => Ok(EventParticipationStatus::Pending),
+        "joined" => Ok(EventParticipationStatus::Joined),
+        "rejected" => Ok(EventParticipationStatus::Rejected),
+        _ => Err(HttpErr::internal(
+            DB_ERROR,
+            anyhow::anyhow!("unknown event participation status: {value}"),
+        )),
+    }
+}
+
+fn participation_status_name(value: &EventParticipationStatus) -> &'static str {
+    match value {
+        EventParticipationStatus::Pending => "pending",
+        EventParticipationStatus::Joined => "joined",
+        EventParticipationStatus::Rejected => "rejected",
+    }
 }
 
 fn to_event_resp(event: Event) -> Result<EventResp, HttpErr> {
@@ -329,6 +697,7 @@ fn to_event_resp(event: Event) -> Result<EventResp, HttpErr> {
         location_name: event.location_name,
         location_address: event.location_address,
         capacity: event.capacity,
+        requires_approval: event.requires_approval,
         tags: event.tags,
         created_at: event.created_at.to_rfc3339(),
         updated_at: event.updated_at.to_rfc3339(),
@@ -365,6 +734,7 @@ async fn insert_event_with_conn(
         location_name: draft.location_name,
         location_address: draft.location_address,
         capacity: draft.capacity,
+        requires_approval: draft.requires_approval,
         tags: draft.tags,
         published_at,
     };
@@ -395,6 +765,7 @@ fn normalize_publish_payload(req: CreateEventRequest) -> Result<NormalizedEventD
         location_name: req.location_name,
         location_address: req.location_address,
         capacity: req.capacity,
+        requires_approval: req.requires_approval,
         tags: req.tags,
         mode: ContentValidationMode::Publish,
     })
@@ -411,6 +782,7 @@ fn normalize_draft_update_payload(
         location_name: req.location_name,
         location_address: req.location_address,
         capacity: req.capacity,
+        requires_approval: req.requires_approval,
         tags: req.tags,
         mode: ContentValidationMode::Draft,
     })
@@ -427,6 +799,7 @@ fn normalize_draft_create_payload(
         location_name: req.location_name,
         location_address: req.location_address,
         capacity: req.capacity,
+        requires_approval: req.requires_approval,
         tags: req.tags.unwrap_or_default(),
         mode: ContentValidationMode::Draft,
     })
@@ -441,6 +814,7 @@ fn normalize_full_payload(raw: RawEventPayload) -> Result<NormalizedEventDraft, 
         location_name,
         location_address,
         capacity,
+        requires_approval,
         tags,
         mode,
     } = raw;
@@ -468,6 +842,7 @@ fn normalize_full_payload(raw: RawEventPayload) -> Result<NormalizedEventDraft, 
         location_name: normalize_optional_text(location_name, 80)?,
         location_address: normalize_optional_text(location_address, 200)?,
         capacity: validate_capacity(capacity)?,
+        requires_approval,
     })
 }
 
@@ -483,6 +858,7 @@ fn to_draft_changes(draft: NormalizedEventDraft) -> Result<EventDraftChanges, Ht
         location_name: draft.location_name,
         location_address: draft.location_address,
         capacity: draft.capacity,
+        requires_approval: draft.requires_approval,
         tags: draft.tags,
     })
 }
@@ -506,6 +882,7 @@ fn build_publish_changes(event: Event) -> Result<PublishEventDraftChanges, HttpE
         location_name: event.location_name,
         location_address: event.location_address,
         capacity: validate_capacity(event.capacity)?,
+        requires_approval: event.requires_approval,
         tags: normalize_tags(event.tags)?,
         status: "published".to_string(),
         published_at: Some(Utc::now()),
@@ -943,6 +1320,12 @@ fn parse_event_id(value: &str) -> Result<i64, HttpErr> {
         .map_err(|_| HttpErr::client(StatusCode::BAD_REQUEST, INVALID_INPUT))
 }
 
+fn parse_user_id(value: &str) -> Result<i64, HttpErr> {
+    value
+        .parse::<i64>()
+        .map_err(|_| HttpErr::client(StatusCode::BAD_REQUEST, INVALID_INPUT))
+}
+
 fn parse_optional_status(value: Option<&str>) -> Result<Option<String>, HttpErr> {
     let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(None);
@@ -970,6 +1353,12 @@ pub fn route(state: crate::http::AppState) -> AppRoutes {
             "/me/events",
             EVENT_CREATE_PERMISSION,
             get(list_owned_events),
+        )
+        .protected(
+            Method::GET,
+            "/me/joined-events",
+            EVENT_JOIN_PERMISSION,
+            get(list_joined_events),
         )
         .protected(
             Method::POST,
@@ -1000,6 +1389,30 @@ pub fn route(state: crate::http::AppState) -> AppRoutes {
             "/event/{event_id}/publish",
             EVENT_CREATE_PERMISSION,
             post(publish_event_draft),
+        )
+        .protected(
+            Method::GET,
+            "/event/{event_id}/participation",
+            EVENT_JOIN_PERMISSION,
+            get(get_event_participation),
+        )
+        .protected(
+            Method::POST,
+            "/event/{event_id}/join",
+            EVENT_JOIN_PERMISSION,
+            post(join_event),
+        )
+        .protected(
+            Method::GET,
+            "/event/{event_id}/join-requests",
+            EVENT_CREATE_PERMISSION,
+            get(list_event_join_requests),
+        )
+        .protected(
+            Method::PATCH,
+            "/event/{event_id}/join-requests/{applicant_id}",
+            EVENT_CREATE_PERMISSION,
+            patch(review_event_join_request),
         )
         .with_state(state)
 }
@@ -1036,6 +1449,7 @@ mod tests {
             location_name: Some("  场地  ".to_string()),
             location_address: None,
             capacity: Some(20),
+            requires_approval: true,
             tags: vec![
                 " rust ".to_string(),
                 "#rust".to_string(),
@@ -1084,6 +1498,7 @@ mod tests {
         assert_eq!(changes.status, "published");
         assert!(changes.published_at.is_some());
         assert_eq!(changes.capacity, Some(20));
+        assert!(changes.requires_approval);
         assert_eq!(changes.tags, vec!["rust".to_string(), "后端".to_string()]);
     }
 

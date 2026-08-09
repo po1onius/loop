@@ -6,7 +6,7 @@ import {
   StyleSheet,
   TextInput,
 } from "react-native";
-import { router } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { login } from "@/lib/auth-api";
@@ -14,6 +14,8 @@ import { ThemedText } from "@/components/themed-text";
 import { ThemedView } from "@/components/themed-view";
 
 export default function LoginScreen() {
+  const params = useLocalSearchParams<{ redirect?: string | string[] }>();
+  const redirect = normalizeRedirect(params.redirect);
   const [account, setAccount] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -31,7 +33,8 @@ export default function LoginScreen() {
         account: account.trim(),
         password,
       });
-      router.replace("/(tabs)");
+      console.info("[login] login completed", { redirect: redirect ?? "/(tabs)" });
+      router.replace((redirect ?? "/(tabs)") as never);
     } catch (e) {
       setError(e instanceof Error ? e.message : "登录失败");
     } finally {
@@ -95,6 +98,14 @@ export default function LoginScreen() {
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
+}
+
+function normalizeRedirect(value: string | string[] | undefined): string | null {
+  const candidate = Array.isArray(value) ? value[0]?.trim() : value?.trim();
+  // 仅接受应用内绝对路径，避免把登录成功后的导航参数当成外部 URL 使用。
+  return candidate?.startsWith("/") && !candidate.startsWith("//")
+    ? candidate
+    : null;
 }
 
 const styles = StyleSheet.create({

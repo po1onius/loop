@@ -6,6 +6,10 @@ export function setAccessToken(token: string | null) {
   accessToken = token;
 }
 
+export function hasAccessToken(): boolean {
+  return Boolean(accessToken);
+}
+
 function normalizeBaseUrl(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
   if (!trimmed) {

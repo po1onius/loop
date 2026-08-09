@@ -33,10 +33,35 @@ table! {
         location_name -> Nullable<Text>,
         location_address -> Nullable<Text>,
         capacity -> Nullable<Int4>,
+        requires_approval -> Bool,
         tags -> Array<Text>,
         created_at -> Timestamptz,
         updated_at -> Timestamptz,
         published_at -> Nullable<Timestamptz>,
+    }
+}
+
+table! {
+    event_participations(event_id, user_id) {
+        event_id -> Int8,
+        user_id -> Int8,
+        status -> Text,
+        requested_at -> Timestamptz,
+        reviewed_at -> Nullable<Timestamptz>,
+        reviewed_by -> Nullable<Int8>,
+        joined_at -> Nullable<Timestamptz>,
+    }
+}
+
+// 参与申请列表需要展示申请人的用户名。这里仅声明查询所需的用户表字段，
+// 不建立 Diesel association，也不依赖数据库外键。
+table! {
+    users(user_id) {
+        user_id -> BigSerial,
+        username -> Text,
+        account -> Text,
+        pwd -> Text,
+        role -> Text,
     }
 }
 
@@ -57,6 +82,7 @@ pub struct Event {
     pub location_name: Option<String>,
     pub location_address: Option<String>,
     pub capacity: Option<i32>,
+    pub requires_approval: bool,
     pub tags: Vec<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -79,6 +105,7 @@ pub struct NewEvent {
     pub location_name: Option<String>,
     pub location_address: Option<String>,
     pub capacity: Option<i32>,
+    pub requires_approval: bool,
     pub tags: Vec<String>,
     pub published_at: Option<DateTime<Utc>>,
 }
@@ -98,6 +125,7 @@ pub struct EventDraftChanges {
     pub location_name: Option<String>,
     pub location_address: Option<String>,
     pub capacity: Option<i32>,
+    pub requires_approval: bool,
     pub tags: Vec<String>,
 }
 
@@ -116,6 +144,7 @@ pub struct PublishEventDraftChanges {
     pub location_name: Option<String>,
     pub location_address: Option<String>,
     pub capacity: Option<i32>,
+    pub requires_approval: bool,
     pub tags: Vec<String>,
     pub status: String,
     pub published_at: Option<DateTime<Utc>>,
@@ -152,7 +181,40 @@ pub struct NewMediaAsset {
     pub variants_json: serde_json::Value,
 }
 
-allow_tables_to_appear_in_same_query!(events, media_assets);
+#[derive(Queryable, Selectable, Debug)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+#[diesel(table_name = event_participations)]
+#[diesel(primary_key(event_id, user_id))]
+pub struct EventParticipation {
+    pub event_id: i64,
+    pub user_id: i64,
+    pub status: String,
+    pub requested_at: DateTime<Utc>,
+    pub reviewed_at: Option<DateTime<Utc>>,
+    pub reviewed_by: Option<i64>,
+    pub joined_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Insertable, Debug)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+#[diesel(table_name = event_participations)]
+pub struct NewEventParticipation {
+    pub event_id: i64,
+    pub user_id: i64,
+    pub status: String,
+    pub requested_at: DateTime<Utc>,
+    pub reviewed_at: Option<DateTime<Utc>>,
+    pub reviewed_by: Option<i64>,
+    pub joined_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug)]
+pub struct EventParticipationApplicant {
+    pub participation: EventParticipation,
+    pub username: String,
+}
+
+allow_tables_to_appear_in_same_query!(events, event_participations, media_assets, users);
 
 impl Event {
     #[tracing::instrument(
@@ -237,6 +299,39 @@ impl Event {
     }
 
     #[tracing::instrument(
+        name = "db.event.select_joined_by_user",
+        skip(conn),
+        fields(
+            db.system = "postgresql",
+            db.operation = "select",
+            db.table = "events,event_participations",
+            user.id = user_id,
+            event.limit = limit,
+            event.offset = offset,
+        )
+    )]
+    pub async fn select_joined_by_user(
+        user_id: i64,
+        limit: i64,
+        offset: i64,
+        conn: &mut DieselConn,
+    ) -> Result<Vec<Self>, diesel::result::Error> {
+        // “我参加的”只包含已经正式加入且活动仍处于发布状态的记录；
+        // pending/rejected 参与关系不会出现在该列表中。
+        event_participations::table
+            .inner_join(events::table.on(events::event_id.eq(event_participations::event_id)))
+            .filter(event_participations::user_id.eq(user_id))
+            .filter(event_participations::status.eq("joined"))
+            .filter(events::status.eq("published"))
+            .order(event_participations::joined_at.desc())
+            .limit(limit)
+            .offset(offset)
+            .select(Self::as_select())
+            .load::<Self>(conn)
+            .await
+    }
+
+    #[tracing::instrument(
         name = "db.event.select_published_by_id",
         skip(conn),
         fields(
@@ -255,6 +350,31 @@ impl Event {
             .filter(events::event_id.eq(event_id))
             .filter(events::status.eq("published"))
             .select(Self::as_select())
+            .first::<Self>(conn)
+            .await
+            .optional()
+    }
+
+    #[tracing::instrument(
+        name = "db.event.select_published_by_id_for_update",
+        skip(conn),
+        fields(
+            db.system = "postgresql",
+            db.operation = "select_for_update",
+            db.table = "events",
+            event.id = event_id,
+        )
+    )]
+    pub async fn select_published_by_id_for_update(
+        event_id: i64,
+        conn: &mut DieselConn,
+    ) -> Result<Option<Self>, diesel::result::Error> {
+        // 所有改变参与人数的操作都先锁活动行，使容量检查与写入在同一活动内串行执行。
+        events::table
+            .filter(events::event_id.eq(event_id))
+            .filter(events::status.eq("published"))
+            .select(Self::as_select())
+            .for_update()
             .first::<Self>(conn)
             .await
             .optional()
@@ -395,6 +515,183 @@ impl Event {
                 .filter(events::status.eq("draft")),
         )
         .execute(conn)
+        .await
+    }
+}
+
+impl EventParticipation {
+    #[tracing::instrument(
+        name = "db.event_participation.select",
+        skip(conn),
+        fields(
+            db.system = "postgresql",
+            db.operation = "select",
+            db.table = "event_participations",
+            event.id = event_id,
+            user.id = user_id,
+        )
+    )]
+    pub async fn select(
+        event_id: i64,
+        user_id: i64,
+        conn: &mut DieselConn,
+    ) -> Result<Option<Self>, diesel::result::Error> {
+        event_participations::table
+            .find((event_id, user_id))
+            .select(Self::as_select())
+            .first::<Self>(conn)
+            .await
+            .optional()
+    }
+
+    #[tracing::instrument(
+        name = "db.event_participation.count_joined",
+        skip(conn),
+        fields(
+            db.system = "postgresql",
+            db.operation = "count",
+            db.table = "event_participations",
+            event.id = event_id,
+        )
+    )]
+    pub async fn count_joined(
+        event_id: i64,
+        conn: &mut DieselConn,
+    ) -> Result<i64, diesel::result::Error> {
+        event_participations::table
+            .filter(event_participations::event_id.eq(event_id))
+            .filter(event_participations::status.eq("joined"))
+            .count()
+            .get_result::<i64>(conn)
+            .await
+    }
+
+    #[tracing::instrument(
+        name = "db.event_participation.insert",
+        skip(participation, conn),
+        fields(
+            db.system = "postgresql",
+            db.operation = "insert",
+            db.table = "event_participations",
+            event.id = participation.event_id,
+            user.id = participation.user_id,
+            participation.status = %participation.status,
+        )
+    )]
+    pub async fn insert(
+        participation: NewEventParticipation,
+        conn: &mut DieselConn,
+    ) -> Result<Self, diesel::result::Error> {
+        diesel::insert_into(event_participations::table)
+            .values(&participation)
+            .returning(Self::as_returning())
+            .get_result::<Self>(conn)
+            .await
+    }
+
+    #[tracing::instrument(
+        name = "db.event_participation.reapply",
+        skip(conn),
+        fields(
+            db.system = "postgresql",
+            db.operation = "update",
+            db.table = "event_participations",
+            event.id = event_id,
+            user.id = user_id,
+            participation.status = status,
+        )
+    )]
+    pub async fn reapply(
+        event_id: i64,
+        user_id: i64,
+        status: &str,
+        requested_at: DateTime<Utc>,
+        joined_at: Option<DateTime<Utc>>,
+        conn: &mut DieselConn,
+    ) -> Result<Self, diesel::result::Error> {
+        diesel::update(
+            event_participations::table
+                .find((event_id, user_id))
+                .filter(event_participations::status.eq("rejected")),
+        )
+        .set((
+            event_participations::status.eq(status),
+            event_participations::requested_at.eq(requested_at),
+            event_participations::reviewed_at.eq(None::<DateTime<Utc>>),
+            event_participations::reviewed_by.eq(None::<i64>),
+            event_participations::joined_at.eq(joined_at),
+        ))
+        .returning(Self::as_returning())
+        .get_result::<Self>(conn)
+        .await
+    }
+
+    #[tracing::instrument(
+        name = "db.event_participation.list_pending_applicants",
+        skip(conn),
+        fields(
+            db.system = "postgresql",
+            db.operation = "select",
+            db.table = "event_participations",
+            event.id = event_id,
+        )
+    )]
+    pub async fn list_pending_applicants(
+        event_id: i64,
+        conn: &mut DieselConn,
+    ) -> Result<Vec<EventParticipationApplicant>, diesel::result::Error> {
+        let rows = event_participations::table
+            .inner_join(users::table.on(users::user_id.eq(event_participations::user_id)))
+            .filter(event_participations::event_id.eq(event_id))
+            .filter(event_participations::status.eq("pending"))
+            .order(event_participations::requested_at.asc())
+            .select((Self::as_select(), users::username))
+            .load::<(Self, String)>(conn)
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|(participation, username)| EventParticipationApplicant {
+                participation,
+                username,
+            })
+            .collect())
+    }
+
+    #[tracing::instrument(
+        name = "db.event_participation.review_pending",
+        skip(conn),
+        fields(
+            db.system = "postgresql",
+            db.operation = "update",
+            db.table = "event_participations",
+            event.id = event_id,
+            user.id = user_id,
+            reviewer.id = reviewer_id,
+            participation.status = status,
+        )
+    )]
+    pub async fn review_pending(
+        event_id: i64,
+        user_id: i64,
+        reviewer_id: i64,
+        status: &str,
+        reviewed_at: DateTime<Utc>,
+        joined_at: Option<DateTime<Utc>>,
+        conn: &mut DieselConn,
+    ) -> Result<Self, diesel::result::Error> {
+        diesel::update(
+            event_participations::table
+                .find((event_id, user_id))
+                .filter(event_participations::status.eq("pending")),
+        )
+        .set((
+            event_participations::status.eq(status),
+            event_participations::reviewed_at.eq(Some(reviewed_at)),
+            event_participations::reviewed_by.eq(Some(reviewer_id)),
+            event_participations::joined_at.eq(joined_at),
+        ))
+        .returning(Self::as_returning())
+        .get_result::<Self>(conn)
         .await
     }
 }

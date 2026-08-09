@@ -18,6 +18,17 @@ CREATE TABLE users (
     CONSTRAINT users_role_not_empty CHECK (length(btrim(role)) > 0)
 );
 
+-- ==================== 仅用于开发测试，生产部署前请删除本区块 ====================
+-- 三个账号用于验证“发布活动 -> 申请加入 -> 发布者审核”的完整流程。
+-- 登录密码统一为：123456
+-- pwd 已按后端 bcrypt DEFAULT_COST（当前为 12）生成，不能把明文密码直接写入 pwd 字段。
+INSERT INTO users (username, account, pwd, role)
+VALUES
+    ('测试发布者', 't1@t.com', '$2b$12$.e.sQCAfkJYgg4EyRrIfvuaMBXWAp..xbZtshvuAThqTEvprB48Uq', 'organizer'),
+    ('测试用户一', 't2@t.com', '$2b$12$.e.sQCAfkJYgg4EyRrIfvuaMBXWAp..xbZtshvuAThqTEvprB48Uq', 'user'),
+    ('测试用户二', 't3@t.com', '$2b$12$.e.sQCAfkJYgg4EyRrIfvuaMBXWAp..xbZtshvuAThqTEvprB48Uq', 'user');
+-- ==================== 仅用于开发测试，生产部署前请删除本区块 ====================
+
 CREATE TABLE refresh_tokens (
     id BIGSERIAL PRIMARY KEY,
     user_id BIGINT NOT NULL,
@@ -83,6 +94,7 @@ CREATE TABLE events (
     location_name TEXT,
     location_address TEXT,
     capacity INTEGER,
+    requires_approval BOOLEAN NOT NULL DEFAULT FALSE,
     tags TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -131,3 +143,31 @@ CREATE TRIGGER trg_events_updated_at
 BEFORE UPDATE ON events
 FOR EACH ROW
 EXECUTE FUNCTION set_events_updated_at();
+
+-- 用户与活动的参与关系独立建表，并通过唯一约束保证同一用户在同一活动中只有一条记录。
+-- 按项目约定不建立数据库外键；活动和用户是否存在、发布者是否有权审核均由业务层校验。
+CREATE TABLE event_participations (
+    event_id BIGINT NOT NULL,
+    user_id BIGINT NOT NULL,
+    status TEXT NOT NULL,
+    requested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    reviewed_at TIMESTAMPTZ,
+    reviewed_by BIGINT,
+    joined_at TIMESTAMPTZ,
+    PRIMARY KEY (event_id, user_id),
+    CONSTRAINT event_participations_status_allowed CHECK (status IN ('pending', 'joined', 'rejected')),
+    CONSTRAINT event_participations_joined_at_consistent CHECK (
+        (status = 'joined' AND joined_at IS NOT NULL) OR
+        (status <> 'joined' AND joined_at IS NULL)
+    ),
+    CONSTRAINT event_participations_review_consistent CHECK (
+        (reviewed_at IS NULL AND reviewed_by IS NULL) OR
+        (reviewed_at IS NOT NULL AND reviewed_by IS NOT NULL)
+    )
+);
+
+CREATE INDEX idx_event_participations_user_status
+ON event_participations(user_id, status);
+
+CREATE INDEX idx_event_participations_event_status_requested_at
+ON event_participations(event_id, status, requested_at);

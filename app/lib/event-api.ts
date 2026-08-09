@@ -1,8 +1,12 @@
 import type {
   CreateEventDraftRequest,
   CreateEventRequest,
+  EventParticipationResp,
+  EventParticipationStateResp,
   EventResp,
+  ListEventJoinRequestsResp,
   ListEventsResp,
+  ReviewEventJoinRequest,
   UpdateEventDraftRequest,
 } from "@/lib/dto";
 import { requestJson } from "@/lib/api-client";
@@ -22,6 +26,59 @@ export function getEvent(eventId: string): Promise<EventResp> {
   });
   return requestJson<undefined, EventResp>(
     `/event/${encodeURIComponent(normalizedEventId)}`,
+  );
+}
+
+export function getEventParticipation(
+  eventId: string,
+): Promise<EventParticipationStateResp> {
+  const normalizedEventId = eventId.trim();
+  console.info("[event-api] loading event participation state", {
+    eventId: normalizedEventId,
+  });
+  return requestJson<undefined, EventParticipationStateResp>(
+    `/event/${encodeURIComponent(normalizedEventId)}/participation`,
+    { auth: true },
+  );
+}
+
+export function joinEvent(eventId: string): Promise<EventParticipationResp> {
+  const normalizedEventId = eventId.trim();
+  console.info("[event-api] joining event", { eventId: normalizedEventId });
+  return requestJson<undefined, EventParticipationResp>(
+    `/event/${encodeURIComponent(normalizedEventId)}/join`,
+    { method: "POST", auth: true },
+  );
+}
+
+export function listEventJoinRequests(
+  eventId: string,
+): Promise<ListEventJoinRequestsResp> {
+  const normalizedEventId = eventId.trim();
+  console.info("[event-api] loading event join requests", {
+    eventId: normalizedEventId,
+  });
+  return requestJson<undefined, ListEventJoinRequestsResp>(
+    `/event/${encodeURIComponent(normalizedEventId)}/join-requests`,
+    { auth: true },
+  );
+}
+
+export function reviewEventJoinRequest(
+  eventId: string,
+  applicantId: string,
+  params: ReviewEventJoinRequest,
+): Promise<EventParticipationResp> {
+  const normalizedEventId = eventId.trim();
+  const normalizedApplicantId = applicantId.trim();
+  console.info("[event-api] reviewing event join request", {
+    eventId: normalizedEventId,
+    applicantId: normalizedApplicantId,
+    decision: params.decision,
+  });
+  return requestJson<ReviewEventJoinRequest, EventParticipationResp>(
+    `/event/${encodeURIComponent(normalizedEventId)}/join-requests/${encodeURIComponent(normalizedApplicantId)}`,
+    { method: "PATCH", auth: true, body: params },
   );
 }
 
@@ -124,6 +181,21 @@ export function listMyEvents(
   );
 }
 
+export function listMyJoinedEvents(
+  limit = 20,
+  offset = 0,
+): Promise<ListEventsResp> {
+  const params = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset),
+  });
+  console.info("[event-api] loading joined events", { limit, offset });
+  return requestJson<undefined, ListEventsResp>(
+    `/me/joined-events?${params.toString()}`,
+    { auth: true },
+  );
+}
+
 export async function listAllMyEventDrafts(): Promise<EventResp[]> {
   const pageSize = 50;
   const drafts: EventResp[] = [];
@@ -158,6 +230,10 @@ export type {
   CreateEventDraftRequest,
   CreateEventRequest,
   EventResp,
+  EventParticipationResp,
+  EventParticipationStateResp,
+  ListEventJoinRequestsResp,
   ListEventsResp,
+  ReviewEventJoinRequest,
   UpdateEventDraftRequest,
 };

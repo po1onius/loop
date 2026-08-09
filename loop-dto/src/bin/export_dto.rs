@@ -3,10 +3,12 @@ use std::{fs, io, path::PathBuf};
 use loop_dto::{
     CompleteMediaUploadResp, CreateEventDraftRequest, CreateEventRequest, CreateMediaUploadRequest,
     CreateMediaUploadResp, EventContentBlock, EventContentDoc, EventContentImage,
-    EventFeatureBlock, EventInlineNode, EventResp, EventStatus, EventTextColor, EventTextMark,
-    ListEventsResp, LoginRequest, LoginResp, MediaAssetResp, MediaDownloadUrlResp, PresignedHeader,
-    RefreshTokenRequest, RegisterRequest, SetTokenRequest, UpdateEventDraftRequest,
-    VerifyCodeRequest, VerifyCodeResp,
+    EventFeatureBlock, EventInlineNode, EventJoinRequestResp, EventJoinReviewDecision,
+    EventParticipationResp, EventParticipationStateResp, EventParticipationStatus, EventResp,
+    EventStatus, EventTextColor, EventTextMark, ListEventJoinRequestsResp, ListEventsResp,
+    LoginRequest, LoginResp, MediaAssetResp, MediaDownloadUrlResp, PresignedHeader,
+    RefreshTokenRequest, RegisterRequest, ReviewEventJoinRequest, SetTokenRequest,
+    UpdateEventDraftRequest, VerifyCodeRequest, VerifyCodeResp,
 };
 use ts_rs::{Config, TS};
 
@@ -31,11 +33,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     append::<EventContentImage>(&cfg, &mut declarations)?;
     append::<EventFeatureBlock>(&cfg, &mut declarations)?;
     append::<EventInlineNode>(&cfg, &mut declarations)?;
+    append::<EventJoinRequestResp>(&cfg, &mut declarations)?;
+    append::<EventJoinReviewDecision>(&cfg, &mut declarations)?;
+    append::<EventParticipationResp>(&cfg, &mut declarations)?;
+    append::<EventParticipationStateResp>(&cfg, &mut declarations)?;
+    append::<EventParticipationStatus>(&cfg, &mut declarations)?;
     append::<EventResp>(&cfg, &mut declarations)?;
     append::<EventStatus>(&cfg, &mut declarations)?;
     append::<EventTextColor>(&cfg, &mut declarations)?;
     append::<EventTextMark>(&cfg, &mut declarations)?;
     append::<ListEventsResp>(&cfg, &mut declarations)?;
+    append::<ListEventJoinRequestsResp>(&cfg, &mut declarations)?;
     append::<LoginRequest>(&cfg, &mut declarations)?;
     append::<LoginResp>(&cfg, &mut declarations)?;
     append::<MediaAssetResp>(&cfg, &mut declarations)?;
@@ -43,6 +51,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     append::<PresignedHeader>(&cfg, &mut declarations)?;
     append::<RefreshTokenRequest>(&cfg, &mut declarations)?;
     append::<RegisterRequest>(&cfg, &mut declarations)?;
+    append::<ReviewEventJoinRequest>(&cfg, &mut declarations)?;
     append::<SetTokenRequest>(&cfg, &mut declarations)?;
     append::<VerifyCodeRequest>(&cfg, &mut declarations)?;
     append::<VerifyCodeResp>(&cfg, &mut declarations)?;

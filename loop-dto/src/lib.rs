@@ -138,6 +138,8 @@ pub struct CreateEventRequest {
     pub location_name: Option<String>,
     pub location_address: Option<String>,
     pub capacity: Option<i32>,
+    #[serde(default)]
+    pub requires_approval: bool,
     pub tags: Vec<String>,
 }
 
@@ -151,6 +153,8 @@ pub struct CreateEventDraftRequest {
     pub location_name: Option<String>,
     pub location_address: Option<String>,
     pub capacity: Option<i32>,
+    #[serde(default)]
+    pub requires_approval: bool,
     pub tags: Option<Vec<String>>,
 }
 
@@ -164,6 +168,8 @@ pub struct UpdateEventDraftRequest {
     pub location_name: Option<String>,
     pub location_address: Option<String>,
     pub capacity: Option<i32>,
+    #[serde(default)]
+    pub requires_approval: bool,
     pub tags: Vec<String>,
 }
 
@@ -183,9 +189,67 @@ pub struct EventResp {
     pub location_name: Option<String>,
     pub location_address: Option<String>,
     pub capacity: Option<i32>,
+    pub requires_approval: bool,
     pub tags: Vec<String>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "dto.ts")]
+pub enum EventParticipationStatus {
+    Pending,
+    Joined,
+    Rejected,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export_to = "dto.ts")]
+pub struct EventParticipationResp {
+    pub event_id: String,
+    pub user_id: String,
+    pub status: EventParticipationStatus,
+    pub requested_at: String,
+    pub reviewed_at: Option<String>,
+    pub joined_at: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export_to = "dto.ts")]
+pub struct EventParticipationStateResp {
+    pub is_creator: bool,
+    pub participation: Option<EventParticipationResp>,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export_to = "dto.ts")]
+pub struct EventJoinRequestResp {
+    pub user_id: String,
+    pub username: String,
+    pub status: EventParticipationStatus,
+    pub requested_at: String,
+    pub reviewed_at: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export_to = "dto.ts")]
+pub struct ListEventJoinRequestsResp {
+    pub items: Vec<EventJoinRequestResp>,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "dto.ts")]
+pub enum EventJoinReviewDecision {
+    Approve,
+    Reject,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export_to = "dto.ts")]
+pub struct ReviewEventJoinRequest {
+    pub decision: EventJoinReviewDecision,
 }
 
 #[derive(Debug, Serialize, Deserialize, TS)]

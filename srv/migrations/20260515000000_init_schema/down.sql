@@ -1,3 +1,4 @@
+DROP TABLE event_participations;
 DROP TRIGGER trg_events_updated_at ON events;
 DROP FUNCTION set_events_updated_at();
 DROP TABLE events;
