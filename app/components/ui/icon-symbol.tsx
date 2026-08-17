@@ -23,6 +23,7 @@ const MAPPING = {
   "message.fill": "chat",
   "paperplane.fill": "send",
   "person.crop.circle": "account-circle",
+  "person.fill": "person",
   "person.text.rectangle": "badge",
   "person.3.fill": "groups",
   "list.bullet.rectangle": "event-note",

@@ -1,8 +1,10 @@
 import type {
+  CurrentUserResp,
   LoginRequest,
   LoginResp,
   RefreshTokenRequest,
   RegisterRequest,
+  UpdateUserAvatarRequest,
   VerifyCodeRequest,
   VerifyCodeResp,
 } from "@/lib/dto";
@@ -63,11 +65,30 @@ export function register(params: RegisterRequest): Promise<void> {
   });
 }
 
+export function getCurrentUser(): Promise<CurrentUserResp> {
+  console.info("[auth-api] loading current user profile");
+  return requestJson<undefined, CurrentUserResp>("/me/profile", { auth: true });
+}
+
+export function updateCurrentUserAvatar(
+  params: UpdateUserAvatarRequest,
+): Promise<CurrentUserResp> {
+  console.info("[auth-api] updating current user avatar", {
+    avatarAssetId: params.avatar_asset_id,
+  });
+  return requestJson<UpdateUserAvatarRequest, CurrentUserResp>(
+    "/me/profile/avatar",
+    { method: "PATCH", auth: true, body: params },
+  );
+}
+
 export type {
+  CurrentUserResp,
   LoginRequest,
   LoginResp,
   RefreshTokenRequest,
   RegisterRequest,
+  UpdateUserAvatarRequest,
   VerifyCodeRequest,
   VerifyCodeResp,
 };

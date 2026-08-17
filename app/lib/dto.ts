@@ -48,6 +48,10 @@ export type LoginRequest = { account: string, password: string, };
 
 export type LoginResp = { access_token: string, expires_in: bigint, refresh_token: string, refresh_exp: bigint, };
 
+export type CurrentUserResp = { user_id: string, username: string, account: string, role: string, avatar_asset_id: string | null, };
+
+export type UpdateUserAvatarRequest = { avatar_asset_id: string, };
+
 export type MediaAssetResp = { asset_id: string, mime_type: string, byte_size: bigint, width: number | null, height: number | null, status: string, public_url: string | null, created_at: string, };
 
 export type MediaDownloadUrlResp = { asset_id: string, download_method: string, download_url: string, download_headers: Array<PresignedHeader>, expires_in: number, };

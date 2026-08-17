@@ -9,6 +9,7 @@ CREATE TABLE users (
     account TEXT NOT NULL,
     pwd TEXT NOT NULL,
     role TEXT NOT NULL DEFAULT 'user',
+    avatar_asset_id TEXT,
     CONSTRAINT users_account_key UNIQUE (account),
     CONSTRAINT users_username_not_empty CHECK (length(btrim(username)) > 0),
     CONSTRAINT users_username_len CHECK (char_length(username) <= 50),
@@ -17,6 +18,12 @@ CREATE TABLE users (
     CONSTRAINT users_pwd_not_empty CHECK (length(pwd) > 0),
     CONSTRAINT users_role_not_empty CHECK (length(btrim(role)) > 0)
 );
+
+-- 头像资源由业务层校验属于当前用户且已经上传完成。按项目约定不建立外键，
+-- 普通索引用于后续资源引用分析和清理任务。
+CREATE INDEX idx_users_avatar_asset_id
+ON users(avatar_asset_id)
+WHERE avatar_asset_id IS NOT NULL;
 
 -- ==================== 仅用于开发测试，生产部署前请删除本区块 ====================
 -- 三个账号用于验证“发布活动 -> 申请加入 -> 发布者审核”的完整流程。

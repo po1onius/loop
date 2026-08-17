@@ -2,14 +2,18 @@ use crate::{
     config::config,
     db_conn,
     http::{
-        AppRoutes, AppState, Claims, HttpErr, OptionExt, ResultExt,
+        AppRoutes, AppState, AuthInfo, Claims, HttpErr, OptionExt, ResultExt,
         err_key::*,
         util::{ckb_vc, generate_code, hex_encode},
     },
     redis_conn,
     service::notify::email_code,
 };
-use axum::{Json, extract::State, routing::post};
+use axum::{
+    Json,
+    extract::State,
+    routing::{get, patch, post},
+};
 use base64::Engine;
 use bcrypt::{DEFAULT_COST, hash, verify};
 use chrono::{Duration, Utc};
@@ -18,18 +22,21 @@ use diesel_async::AsyncConnection;
 use http::{Method, StatusCode};
 use jsonwebtoken::{Algorithm, Header, encode};
 use loop_dto::{
-    LoginRequest, LoginResp, RefreshTokenRequest, RegisterRequest, VerifyCodeRequest,
-    VerifyCodeResp,
+    CurrentUserResp, LoginRequest, LoginResp, RefreshTokenRequest, RegisterRequest,
+    UpdateUserAvatarRequest, VerifyCodeRequest, VerifyCodeResp,
 };
 use loop_svc_model::{
     DieselConn,
     account::{NewRefreshTokens, NewUser, RefreshTokens, User},
+    event::MediaAsset,
 };
 use rand::{Rng, rngs::ThreadRng};
 use redis::AsyncCommands;
 use sha2::{Digest, Sha256};
 
 const DEFAULT_USER_ROLE: &str = "user";
+const USER_PROFILE_READ_PERMISSION: &str = "user.profile.read";
+const USER_PROFILE_UPDATE_PERMISSION: &str = "user.profile.update";
 const VERIFY_CODE_TTL_SECONDS: u64 = 120;
 const VERIFY_CODE_EXPIRE_MINUTES: u64 = VERIFY_CODE_TTL_SECONDS / 60;
 
@@ -240,6 +247,80 @@ pub async fn register(Json(req): Json<RegisterRequest>) -> Result<(), HttpErr> {
     Ok(())
 }
 
+#[tracing::instrument(
+    name = "user.current.get",
+    skip_all,
+    fields(user.id = auth.user_id, auth.role = %auth.role)
+)]
+pub async fn get_current_user(auth: AuthInfo) -> Result<Json<CurrentUserResp>, HttpErr> {
+    // 身份只从鉴权中间件注入的上下文读取，客户端不能指定 user_id，确保该接口
+    // 永远只返回当前登录用户自己的资料。
+    let user = User::select_by_user_id(auth.user_id, &mut db_conn!())
+        .await
+        .internal(DB_ERROR)?
+        .client(StatusCode::NOT_FOUND, USER_NOT_EXIST)?;
+    tracing::info!(
+        event = "user.current.loaded",
+        user_id = user.user_id,
+        role = %user.role,
+        "current user profile loaded"
+    );
+
+    Ok(Json(to_current_user_resp(user)))
+}
+
+#[tracing::instrument(
+    name = "user.avatar.update",
+    skip_all,
+    fields(user.id = auth.user_id, media.asset_id = %req.avatar_asset_id)
+)]
+pub async fn update_current_user_avatar(
+    auth: AuthInfo,
+    Json(req): Json<UpdateUserAvatarRequest>,
+) -> Result<Json<CurrentUserResp>, HttpErr> {
+    let avatar_asset_id = req.avatar_asset_id.trim().to_string();
+    if avatar_asset_id.is_empty() {
+        return Err(HttpErr::client(StatusCode::BAD_REQUEST, INVALID_INPUT));
+    }
+
+    let mut conn = db_conn!();
+    // 头像只能引用当前用户已经完成上传的图片，不能借用其他用户的媒体资源，
+    // 也不能引用仍处于 pending 状态的对象。
+    let assets = MediaAsset::select_uploaded_by_ids_for_owner(
+        std::slice::from_ref(&avatar_asset_id),
+        auth.user_id,
+        &mut conn,
+    )
+    .await
+    .internal(DB_ERROR)?;
+    let asset = assets
+        .first()
+        .filter(|asset| asset.mime_type.starts_with("image/"))
+        .ok_or_else(|| HttpErr::client(StatusCode::NOT_FOUND, MEDIA_NOT_FOUND))?;
+
+    let user = User::update_avatar_asset_id(auth.user_id, &asset.asset_id, &mut conn)
+        .await
+        .internal(DB_ERROR)?;
+    tracing::info!(
+        event = "user.avatar.updated",
+        user_id = user.user_id,
+        media_asset_id = %asset.asset_id,
+        "current user avatar updated"
+    );
+
+    Ok(Json(to_current_user_resp(user)))
+}
+
+fn to_current_user_resp(user: User) -> CurrentUserResp {
+    CurrentUserResp {
+        user_id: user.user_id.to_string(),
+        username: user.username,
+        account: user.account,
+        role: user.role,
+        avatar_asset_id: user.avatar_asset_id,
+    }
+}
+
 #[tracing::instrument(name = "user.verify_code", skip_all)]
 pub async fn verify_code(
     Json(req): Json<VerifyCodeRequest>,
@@ -303,6 +384,18 @@ fn map_user_insert_error(err: DieselError) -> HttpErr {
 
 pub fn route(state: AppState) -> AppRoutes {
     AppRoutes::<AppState>::new()
+        .protected(
+            Method::GET,
+            "/me/profile",
+            USER_PROFILE_READ_PERMISSION,
+            get(get_current_user),
+        )
+        .protected(
+            Method::PATCH,
+            "/me/profile/avatar",
+            USER_PROFILE_UPDATE_PERMISSION,
+            patch(update_current_user_avatar),
+        )
         .public(Method::POST, "/user/login", post(login))
         .public(Method::POST, "/user/refresh_token", post(refresh))
         .public(Method::POST, "/user/register", post(register))

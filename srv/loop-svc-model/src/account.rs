@@ -10,7 +10,8 @@ table! {
         username -> Text,
         account -> Text,
         pwd -> Text,
-        role -> Text
+        role -> Text,
+        avatar_asset_id -> Nullable<Text>
     }
 }
 
@@ -23,6 +24,7 @@ pub struct User {
     pub account: String,
     pub pwd: String,
     pub role: String,
+    pub avatar_asset_id: Option<String>,
 }
 
 #[derive(Insertable)]
@@ -149,6 +151,29 @@ impl User {
         diesel::insert_into(users::table)
             .values(user)
             .execute(conn)
+            .await
+    }
+
+    #[tracing::instrument(
+        name = "db.user.avatar.update",
+        skip(conn),
+        fields(
+            db.system = "postgresql",
+            db.operation = "update",
+            db.table = "users",
+            user.id = user_id,
+            media.asset_id = %avatar_asset_id,
+        )
+    )]
+    pub async fn update_avatar_asset_id(
+        user_id: i64,
+        avatar_asset_id: &str,
+        conn: &mut DieselConn,
+    ) -> Result<Self, diesel::result::Error> {
+        diesel::update(users::table.find(user_id))
+            .set(users::avatar_asset_id.eq(avatar_asset_id))
+            .returning(Self::as_returning())
+            .get_result::<Self>(conn)
             .await
     }
 }

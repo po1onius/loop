@@ -74,6 +74,8 @@ perm_ver = 1
 
 [perm.role_perm]
 user = [
+  "user.profile.read",
+  "user.profile.update",
   "event.read",
   "event.join",
   "event.create",
@@ -82,6 +84,8 @@ user = [
 ]
 
 organizer = [
+  "user.profile.read",
+  "user.profile.update",
   "event.read",
   "event.join",
   "event.create",
@@ -90,6 +94,8 @@ organizer = [
 ]
 
 admin = [
+  "user.profile.read",
+  "user.profile.update",
   "event.*",
   "community.*",
   "user.manage",
@@ -196,6 +202,8 @@ perm_ver = 1
 
 [perm.role_perm]
 user = [
+  "user.profile.read",
+  "user.profile.update",
   "event.read",
   "event.join",
   "event.create",
@@ -204,6 +212,8 @@ user = [
 ]
 
 organizer = [
+  "user.profile.read",
+  "user.profile.update",
   "event.read",
   "event.join",
   "event.create",
@@ -212,6 +222,8 @@ organizer = [
 ]
 
 admin = [
+  "user.profile.read",
+  "user.profile.update",
   "event.*",
   "community.*",
   "user.manage",

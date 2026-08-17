@@ -334,6 +334,22 @@ pub struct LoginResp {
 
 #[derive(Debug, Serialize, Deserialize, TS)]
 #[ts(export_to = "dto.ts")]
+pub struct CurrentUserResp {
+    pub user_id: String,
+    pub username: String,
+    pub account: String,
+    pub role: String,
+    pub avatar_asset_id: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export_to = "dto.ts")]
+pub struct UpdateUserAvatarRequest {
+    pub avatar_asset_id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export_to = "dto.ts")]
 pub struct SetTokenRequest {
     pub user_id: String,
     pub num: i64,

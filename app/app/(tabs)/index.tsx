@@ -2,11 +2,8 @@ import { useFocusEffect } from "@react-navigation/native";
 import { router } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Animated,
   ActivityIndicator,
-  Easing,
   FlatList,
-  Modal,
   Pressable,
   StyleSheet,
   type NativeScrollEvent,
@@ -19,9 +16,8 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { ThemedText } from "@/components/themed-text";
 import { ThemedView } from "@/components/themed-view";
 import { IconSymbol } from "@/components/ui/icon-symbol";
-import { hasAccessToken } from "@/lib/api-client";
 import type { EventResp } from "@/lib/dto";
-import { listEvents, listMyEvents, listMyJoinedEvents } from "@/lib/event-api";
+import { listEvents } from "@/lib/event-api";
 
 type CarouselItem = {
   id: string;
@@ -37,20 +33,7 @@ type ListItem = {
   title: string;
 };
 
-type DrawerItem = {
-  id: string;
-  title: string;
-  icon: "person.text.rectangle" | "list.bullet.rectangle" | "doc.text";
-};
-
 type EventLoadMode = "background" | "refresh";
-type EventListFilter = "recent" | "published" | "joined";
-
-const EVENT_LIST_FILTERS: { id: EventListFilter; label: string }[] = [
-  { id: "recent", label: "近期活动" },
-  { id: "published", label: "我发布的" },
-  { id: "joined", label: "我参加的" },
-];
 
 const CAROUSEL_ITEMS: CarouselItem[] = [
   {
@@ -101,40 +84,17 @@ const FALLBACK_ITEMS: ListItem[] = [
   },
 ];
 
-const DRAWER_ITEMS: DrawerItem[] = [
-  {
-    id: "profile",
-    title: "用户信息",
-    icon: "person.text.rectangle",
-  },
-  {
-    id: "events",
-    title: "我的活动",
-    icon: "list.bullet.rectangle",
-  },
-  {
-    id: "posts",
-    title: "我的帖子",
-    icon: "doc.text",
-  },
-];
-
 export default function HomeScreen() {
   const { width } = useWindowDimensions();
   const carouselRef = useRef<FlatList<CarouselItem>>(null);
-  const drawerTranslateX = useRef(new Animated.Value(-360)).current;
   const latestEventsRequestIdRef = useRef(0);
   const activeRefreshRequestIdRef = useRef<number | null>(null);
   const [activeIndex, setActiveIndex] = useState(0);
-  const [drawerVisible, setDrawerVisible] = useState(false);
   const [events, setEvents] = useState<EventResp[]>([]);
-  const [eventListFilter, setEventListFilter] =
-    useState<EventListFilter>("recent");
   const [loadingEvents, setLoadingEvents] = useState(false);
   const [refreshingEvents, setRefreshingEvents] = useState(false);
   const [eventsError, setEventsError] = useState("");
   const slideWidth = Math.max(width - 32, 1);
-  const drawerWidth = Math.min(Math.max(width * 0.78, 260), 320);
 
   const loadEvents = useCallback(async (mode: EventLoadMode = "background") => {
     const requestId = latestEventsRequestIdRef.current + 1;
@@ -150,21 +110,18 @@ export default function HomeScreen() {
       console.info("[home] loading events", {
         mode,
         requestId,
-        filter: eventListFilter,
       });
-      const resp = await loadEventList(eventListFilter);
+      const resp = await listEvents();
       if (latestEventsRequestIdRef.current !== requestId) {
         console.info("[home] ignored stale events response", {
           mode,
           requestId,
-          filter: eventListFilter,
         });
         return;
       }
       setEvents(resp.items);
       console.info("[home] events loaded", {
         requestId,
-        filter: eventListFilter,
         count: resp.items.length,
       });
     } catch (e) {
@@ -184,7 +141,7 @@ export default function HomeScreen() {
         setLoadingEvents(false);
       }
     }
-  }, [eventListFilter]);
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
@@ -203,30 +160,6 @@ export default function HomeScreen() {
     void loadEvents("refresh");
   }, [loadEvents]);
 
-  const handleEventFilterPress = useCallback(
-    (nextFilter: EventListFilter) => {
-      if (nextFilter === eventListFilter) {
-        return;
-      }
-      if (nextFilter !== "recent" && !hasAccessToken()) {
-        console.info("[home] personal event filter requires login", {
-          filter: nextFilter,
-        });
-        router.push("/login");
-        return;
-      }
-      console.info("[home] event filter changed", {
-        from: eventListFilter,
-        to: nextFilter,
-      });
-      // 先清空上一筛选的结果，避免请求期间把“近期活动”误显示成个人活动。
-      setEvents([]);
-      setEventsError("");
-      setEventListFilter(nextFilter);
-    },
-    [eventListFilter],
-  );
-
   useEffect(() => {
     const timer = setInterval(() => {
       setActiveIndex((prevIndex) => {
@@ -241,22 +174,8 @@ export default function HomeScreen() {
     };
   }, []);
 
-  useEffect(() => {
-    if (!drawerVisible) {
-      return;
-    }
-
-    drawerTranslateX.setValue(-drawerWidth);
-    Animated.timing(drawerTranslateX, {
-      toValue: 0,
-      duration: 220,
-      easing: Easing.out(Easing.cubic),
-      useNativeDriver: true,
-    }).start();
-  }, [drawerTranslateX, drawerVisible, drawerWidth]);
-
   const listItems = useMemo(() => {
-    if (!events.length && eventListFilter === "recent") {
+    if (!events.length) {
       return FALLBACK_ITEMS;
     }
     return events.map((event) => ({
@@ -265,7 +184,7 @@ export default function HomeScreen() {
       id: event.event_id,
       title: event.title,
     }));
-  }, [eventListFilter, events]);
+  }, [events]);
 
   const handleCarouselScrollEnd = (
     event: NativeSyntheticEvent<NativeScrollEvent>,
@@ -274,34 +193,6 @@ export default function HomeScreen() {
     const boundedIndex = Math.max(0, Math.min(index, CAROUSEL_ITEMS.length - 1));
     setActiveIndex(boundedIndex);
   };
-
-  const openUserDrawer = useCallback(() => {
-    setDrawerVisible(true);
-  }, []);
-
-  const closeUserDrawer = useCallback(() => {
-    Animated.timing(drawerTranslateX, {
-      toValue: -drawerWidth,
-      duration: 180,
-      easing: Easing.in(Easing.cubic),
-      useNativeDriver: true,
-    }).start(({ finished }) => {
-      if (finished) {
-        setDrawerVisible(false);
-      }
-    });
-  }, [drawerTranslateX, drawerWidth]);
-
-  const handleDrawerItemPress = useCallback(
-    (item: DrawerItem) => {
-      console.info("[home] user drawer item pressed", {
-        itemId: item.id,
-        title: item.title,
-      });
-      closeUserDrawer();
-    },
-    [closeUserDrawer],
-  );
 
   const handleEventPress = useCallback((item: ListItem) => {
     if (!item.eventId) {
@@ -325,13 +216,6 @@ export default function HomeScreen() {
       <ThemedView style={styles.container}>
         <ThemedView style={styles.topSection}>
           <View style={styles.homeHeader}>
-            <Pressable
-              accessibilityRole="button"
-              onPress={openUserDrawer}
-              style={styles.avatarButton}
-            >
-              <IconSymbol size={34} name="person.crop.circle" color="#0A7EA4" />
-            </Pressable>
             <ThemedText type="subtitle" style={styles.homeHeaderTitle}>
               活动推荐
             </ThemedText>
@@ -371,33 +255,7 @@ export default function HomeScreen() {
         <ThemedView style={styles.bottomSection}>
           <View style={styles.sectionHeader}>
             <ThemedView style={styles.sectionTitleWrap}>
-              <View accessibilityRole="tablist" style={styles.eventFilterBar}>
-                {EVENT_LIST_FILTERS.map((filter) => {
-                  const selected = filter.id === eventListFilter;
-                  return (
-                    <Pressable
-                      key={filter.id}
-                      accessibilityRole="tab"
-                      accessibilityState={{ selected }}
-                      onPress={() => handleEventFilterPress(filter.id)}
-                      style={[
-                        styles.eventFilterButton,
-                        selected ? styles.eventFilterButtonActive : undefined,
-                      ]}
-                    >
-                      <ThemedText
-                        numberOfLines={1}
-                        style={[
-                          styles.eventFilterText,
-                          selected ? styles.eventFilterTextActive : undefined,
-                        ]}
-                      >
-                        {filter.label}
-                      </ThemedText>
-                    </Pressable>
-                  );
-                })}
-              </View>
+              <ThemedText type="subtitle">近期活动</ThemedText>
               {eventsError ? (
                 <ThemedText style={styles.errorText}>{eventsError}</ThemedText>
               ) : null}
@@ -420,10 +278,7 @@ export default function HomeScreen() {
             refreshing={refreshingEvents}
             onRefresh={handleRefreshEvents}
             ListEmptyComponent={
-              <EventListEmptyState
-                filter={eventListFilter}
-                loading={loadingEvents}
-              />
+              <EventListEmptyState loading={loadingEvents} />
             }
             renderItem={({ item }) => (
               <Pressable
@@ -455,35 +310,14 @@ export default function HomeScreen() {
             )}
           />
         </ThemedView>
-        <UserDrawer
-          drawerWidth={drawerWidth}
-          items={DRAWER_ITEMS}
-          translateX={drawerTranslateX}
-          visible={drawerVisible}
-          onClose={closeUserDrawer}
-          onItemPress={handleDrawerItemPress}
-        />
       </ThemedView>
     </SafeAreaView>
   );
 }
 
-async function loadEventList(filter: EventListFilter) {
-  switch (filter) {
-    case "published":
-      return listMyEvents("published");
-    case "joined":
-      return listMyJoinedEvents();
-    case "recent":
-      return listEvents();
-  }
-}
-
 function EventListEmptyState({
-  filter,
   loading,
 }: {
-  filter: EventListFilter;
   loading: boolean;
 }) {
   if (loading) {
@@ -496,82 +330,9 @@ function EventListEmptyState({
   }
   return (
     <View style={styles.eventEmptyState}>
-      <ThemedText type="defaultSemiBold">
-        {filter === "published" ? "还没有发布活动" : "还没有参加活动"}
-      </ThemedText>
-      <ThemedText style={styles.eventEmptyText}>
-        {filter === "published"
-          ? "点击右侧“发布”创建第一个活动"
-          : "正式加入活动后会显示在这里"}
-      </ThemedText>
+      <ThemedText type="defaultSemiBold">暂时没有近期活动</ThemedText>
+      <ThemedText style={styles.eventEmptyText}>下拉刷新后再看看</ThemedText>
     </View>
-  );
-}
-
-function UserDrawer({
-  drawerWidth,
-  items,
-  translateX,
-  visible,
-  onClose,
-  onItemPress,
-}: {
-  drawerWidth: number;
-  items: DrawerItem[];
-  translateX: Animated.Value;
-  visible: boolean;
-  onClose: () => void;
-  onItemPress: (item: DrawerItem) => void;
-}) {
-  return (
-    <Modal
-      animationType="none"
-      transparent
-      visible={visible}
-      onRequestClose={onClose}
-    >
-      <View style={styles.drawerRoot}>
-        <Pressable
-          accessibilityRole="button"
-          onPress={onClose}
-          style={styles.drawerScrim}
-        />
-        <Animated.View
-          style={[
-            styles.drawerPanel,
-            {
-              width: drawerWidth,
-              transform: [{ translateX }],
-            },
-          ]}
-        >
-          <View style={styles.drawerProfile}>
-            <IconSymbol size={48} name="person.crop.circle" color="#0A7EA4" />
-            <View style={styles.drawerProfileText}>
-              <ThemedText type="defaultSemiBold" style={styles.drawerName}>
-                Loop 用户
-              </ThemedText>
-              <ThemedText style={styles.drawerHint}>个人中心</ThemedText>
-            </View>
-          </View>
-
-          <View style={styles.drawerList}>
-            {items.map((item) => (
-              <Pressable
-                key={item.id}
-                accessibilityRole="button"
-                onPress={() => onItemPress(item)}
-                style={styles.drawerItem}
-              >
-                <IconSymbol size={22} name={item.icon} color="#0A7EA4" />
-                <ThemedText style={styles.drawerItemText}>{item.title}</ThemedText>
-                <IconSymbol size={18} name="chevron.right" color="#8A94A6" />
-              </Pressable>
-            ))}
-          </View>
-        </Animated.View>
-      </View>
-    </Modal>
   );
 }
 
@@ -615,14 +376,6 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
-  },
-  avatarButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "#EAF6FA",
   },
   homeHeaderTitle: {
     flex: 1,
@@ -679,30 +432,6 @@ const styles = StyleSheet.create({
   },
   sectionTitleWrap: {
     flex: 1,
-  },
-  eventFilterBar: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-  },
-  eventFilterButton: {
-    minHeight: 34,
-    justifyContent: "center",
-    borderRadius: 9,
-    paddingHorizontal: 8,
-  },
-  eventFilterButtonActive: {
-    backgroundColor: "#EAF6FA",
-  },
-  eventFilterText: {
-    color: "#687076",
-    fontSize: 13,
-    lineHeight: 18,
-    fontWeight: "600",
-  },
-  eventFilterTextActive: {
-    color: "#0A7EA4",
-    fontWeight: "800",
   },
   createButton: {
     height: 38,
@@ -764,62 +493,5 @@ const styles = StyleSheet.create({
   },
   listCardTitle: {
     flex: 1,
-  },
-  drawerRoot: {
-    flex: 1,
-    flexDirection: "row",
-  },
-  drawerScrim: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(17, 24, 28, 0.42)",
-  },
-  drawerPanel: {
-    height: "100%",
-    paddingHorizontal: 16,
-    paddingTop: 54,
-    backgroundColor: "#FFFFFF",
-    shadowColor: "#000000",
-    shadowOpacity: 0.18,
-    shadowRadius: 16,
-    shadowOffset: { width: 4, height: 0 },
-    elevation: 12,
-  },
-  drawerProfile: {
-    minHeight: 72,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: "#E2E8F0",
-    paddingBottom: 16,
-  },
-  drawerProfileText: {
-    flex: 1,
-  },
-  drawerName: {
-    color: "#11181C",
-  },
-  drawerHint: {
-    marginTop: 2,
-    fontSize: 13,
-    lineHeight: 18,
-    color: "#687076",
-  },
-  drawerList: {
-    paddingTop: 12,
-    gap: 4,
-  },
-  drawerItem: {
-    minHeight: 50,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    borderRadius: 10,
-    paddingHorizontal: 10,
-  },
-  drawerItemText: {
-    flex: 1,
-    color: "#11181C",
-    fontWeight: "600",
   },
 });

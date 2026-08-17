@@ -2,13 +2,13 @@ use std::{fs, io, path::PathBuf};
 
 use loop_dto::{
     CompleteMediaUploadResp, CreateEventDraftRequest, CreateEventRequest, CreateMediaUploadRequest,
-    CreateMediaUploadResp, EventContentBlock, EventContentDoc, EventContentImage,
+    CreateMediaUploadResp, CurrentUserResp, EventContentBlock, EventContentDoc, EventContentImage,
     EventFeatureBlock, EventInlineNode, EventJoinRequestResp, EventJoinReviewDecision,
     EventParticipationResp, EventParticipationStateResp, EventParticipationStatus, EventResp,
     EventStatus, EventTextColor, EventTextMark, ListEventJoinRequestsResp, ListEventsResp,
     LoginRequest, LoginResp, MediaAssetResp, MediaDownloadUrlResp, PresignedHeader,
     RefreshTokenRequest, RegisterRequest, ReviewEventJoinRequest, SetTokenRequest,
-    UpdateEventDraftRequest, VerifyCodeRequest, VerifyCodeResp,
+    UpdateEventDraftRequest, UpdateUserAvatarRequest, VerifyCodeRequest, VerifyCodeResp,
 };
 use ts_rs::{Config, TS};
 
@@ -46,6 +46,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     append::<ListEventJoinRequestsResp>(&cfg, &mut declarations)?;
     append::<LoginRequest>(&cfg, &mut declarations)?;
     append::<LoginResp>(&cfg, &mut declarations)?;
+    append::<CurrentUserResp>(&cfg, &mut declarations)?;
+    append::<UpdateUserAvatarRequest>(&cfg, &mut declarations)?;
     append::<MediaAssetResp>(&cfg, &mut declarations)?;
     append::<MediaDownloadUrlResp>(&cfg, &mut declarations)?;
     append::<PresignedHeader>(&cfg, &mut declarations)?;
