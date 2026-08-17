@@ -5,6 +5,7 @@ import { router } from "expo-router";
 import { useCallback, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -15,11 +16,13 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { ThemedText } from "@/components/themed-text";
 import { ThemedView } from "@/components/themed-view";
+import { CommunityPostCard } from "@/components/community-post-card";
 import { IconSymbol } from "@/components/ui/icon-symbol";
 import { useColorScheme } from "@/hooks/use-color-scheme";
-import { getCurrentUser, updateCurrentUserAvatar } from "@/lib/auth-api";
+import { getCurrentUser, logout, updateCurrentUserAvatar } from "@/lib/auth-api";
 import { hasAccessToken } from "@/lib/api-client";
-import type { CurrentUserResp, EventResp } from "@/lib/dto";
+import { listMyCommunityPosts } from "@/lib/community-api";
+import type { CommunityPostResp, CurrentUserResp, EventResp } from "@/lib/dto";
 import { listMyEvents, listMyJoinedEvents } from "@/lib/event-api";
 import { getMediaDownloadUrl, uploadLocalImageAsset } from "@/lib/media-api";
 
@@ -41,6 +44,7 @@ export default function MeScreen() {
   const [profile, setProfile] = useState<CurrentUserResp | null>(null);
   const [joinedEvents, setJoinedEvents] = useState<EventResp[]>([]);
   const [publishedEvents, setPublishedEvents] = useState<EventResp[]>([]);
+  const [myPosts, setMyPosts] = useState<CommunityPostResp[]>([]);
   const [avatarUri, setAvatarUri] = useState<string | null>(null);
   const [activeSection, setActiveSection] =
     useState<PersonalSection>("joined");
@@ -49,6 +53,8 @@ export default function MeScreen() {
   const [updatingAvatar, setUpdatingAvatar] = useState(false);
   const [avatarError, setAvatarError] = useState("");
   const [error, setError] = useState("");
+  const [loggingOut, setLoggingOut] = useState(false);
+  const [logoutError, setLogoutError] = useState("");
 
   const loadPersonalCenter = useCallback(async (mode: LoadMode) => {
     if (!hasAccessToken()) {
@@ -72,7 +78,7 @@ export default function MeScreen() {
     try {
       console.info("[me] loading personal center", { mode, requestId });
       // 三块数据互不依赖，并行请求可以让资料卡和活动列表同时完成加载。
-      const [profileBundle, joinedResp, publishedResp] = await Promise.all([
+      const [profileBundle, joinedResp, publishedResp, postsResp] = await Promise.all([
         getCurrentUser().then(async (nextProfile) => ({
           nextProfile,
           nextAvatarUri: await resolveAvatarDownloadUrl(
@@ -81,6 +87,7 @@ export default function MeScreen() {
         })),
         listMyJoinedEvents(),
         listMyEvents("published"),
+        listMyCommunityPosts(),
       ]);
       if (latestRequestIdRef.current !== requestId) {
         console.info("[me] ignored stale personal center response", {
@@ -94,11 +101,13 @@ export default function MeScreen() {
       setAvatarUri(nextAvatarUri);
       setJoinedEvents(joinedResp.items);
       setPublishedEvents(publishedResp.items);
+      setMyPosts(postsResp.items);
       console.info("[me] personal center loaded", {
         requestId,
         userId: nextProfile.user_id,
         joinedEventCount: joinedResp.items.length,
         publishedEventCount: publishedResp.items.length,
+        postCount: postsResp.items.length,
       });
     } catch (loadError) {
       if (latestRequestIdRef.current !== requestId) {
@@ -218,6 +227,41 @@ export default function MeScreen() {
     setAvatarError("头像加载失败，请稍后重试或重新选择图片");
   }, [profile?.avatar_asset_id]);
 
+  const handleLogout = useCallback(async () => {
+    if (loggingOut) {
+      return;
+    }
+    setLoggingOut(true);
+    setLogoutError("");
+    try {
+      console.info("[me] logging out current user");
+      await logout();
+      console.info("[me] logout completed; redirecting to login");
+      router.replace("/login" as never);
+    } catch (logoutFailure) {
+      const message =
+        logoutFailure instanceof Error ? logoutFailure.message : "注销失败";
+      console.warn("[me] logout failed", { reason: message });
+      setLogoutError("本机登录信息清理失败，请重试");
+    } finally {
+      setLoggingOut(false);
+    }
+  }, [loggingOut]);
+
+  const confirmLogout = useCallback(() => {
+    if (loggingOut) {
+      return;
+    }
+    Alert.alert("退出登录", "将注销当前设备上的登录会话，是否继续？", [
+      { text: "取消", style: "cancel" },
+      {
+        text: "退出登录",
+        style: "destructive",
+        onPress: () => void handleLogout(),
+      },
+    ]);
+  }, [handleLogout, loggingOut]);
+
   const currentEvents =
     activeSection === "joined" ? joinedEvents : publishedEvents;
 
@@ -293,7 +337,7 @@ export default function MeScreen() {
                 { backgroundColor: isDark ? "#2F3A45" : "#DDE3EA" },
               ]}
             />
-            <StatItem label="帖子" value="—" />
+            <StatItem label="帖子" value={profile ? myPosts.length : "—"} />
           </View>
 
           <View
@@ -338,12 +382,31 @@ export default function MeScreen() {
           </View>
 
           {activeSection === "posts" ? (
-            <EmptyContent
-              title="帖子内容暂未接入"
-              description="当前社区还没有帖子数据接口，接入后会在这里集中展示个人帖子"
-              actionLabel="去社区看看"
-              onAction={() => router.push("/(tabs)/community" as never)}
-            />
+            loading && !profile ? (
+              <View style={styles.loadingContent}>
+                <ActivityIndicator color="#0A7EA4" />
+                <ThemedText style={styles.mutedText}>正在加载个人帖子...</ThemedText>
+              </View>
+            ) : myPosts.length ? (
+              <View style={styles.eventList}>
+                {myPosts.map((post) => (
+                  <CommunityPostCard
+                    key={post.post_id}
+                    post={post}
+                    compact
+                    onPress={() => router.push(`/community/post/${encodeURIComponent(post.post_id)}` as never)}
+                    onDiscussionPress={() => router.push(`/conversation/${encodeURIComponent(post.discussion_conversation_id)}` as never)}
+                  />
+                ))}
+              </View>
+            ) : (
+              <EmptyContent
+                title="还没有发布帖子"
+                description="从一个活动想法或有趣经历开始，邀请社区一起讨论"
+                actionLabel="发布帖子"
+                onAction={() => router.push("/create-post" as never)}
+              />
+            )
           ) : loading && !profile ? (
             <View style={styles.loadingContent}>
               <ActivityIndicator color="#0A7EA4" />
@@ -375,6 +438,25 @@ export default function MeScreen() {
               }
             />
           )}
+
+          {logoutError ? (
+            <ThemedText style={styles.logoutErrorText}>{logoutError}</ThemedText>
+          ) : null}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ disabled: loggingOut }}
+            disabled={loggingOut}
+            onPress={confirmLogout}
+            style={({ pressed }) => [
+              styles.logoutButton,
+              pressed ? styles.pressed : undefined,
+            ]}
+          >
+            {loggingOut ? <ActivityIndicator color="#D64545" /> : null}
+            <ThemedText style={styles.logoutButtonText}>
+              {loggingOut ? "正在退出..." : "退出登录"}
+            </ThemedText>
+          </Pressable>
         </ScrollView>
       </ThemedView>
     </SafeAreaView>
@@ -840,5 +922,28 @@ const styles = StyleSheet.create({
   },
   mutedText: {
     color: "#687076",
+  },
+  logoutButton: {
+    minHeight: 48,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    marginTop: 24,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(214, 69, 69, 0.45)",
+    backgroundColor: "rgba(214, 69, 69, 0.08)",
+  },
+  logoutButtonText: {
+    color: "#D64545",
+    fontWeight: "700",
+  },
+  logoutErrorText: {
+    marginTop: 14,
+    color: "#D64545",
+    textAlign: "center",
+    fontSize: 13,
+    lineHeight: 18,
   },
 });

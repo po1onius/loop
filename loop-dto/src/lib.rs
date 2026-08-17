@@ -379,3 +379,171 @@ pub struct VerifyCodeRequest {
 #[derive(Debug, Serialize, Deserialize, TS)]
 #[ts(export_to = "dto.ts")]
 pub struct VerifyCodeResp {}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "dto.ts")]
+pub enum CommunityPostType {
+    EventIdea,
+    EventDiscussion,
+    General,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "dto.ts")]
+pub enum ConversationKind {
+    PostThread,
+    EventGroup,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export_to = "dto.ts")]
+pub struct CommunitySectionResp {
+    pub section_id: String,
+    pub name: String,
+    pub description: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export_to = "dto.ts")]
+pub struct CommunityPostResp {
+    pub post_id: String,
+    pub author_id: String,
+    pub author_username: String,
+    pub author_avatar_asset_id: Option<String>,
+    pub section_id: String,
+    pub section_name: String,
+    pub post_type: CommunityPostType,
+    pub title: String,
+    pub body: String,
+    pub image_asset_ids: Vec<String>,
+    pub discussion_conversation_id: String,
+    pub discussion_count: i64,
+    pub interest_count: i64,
+    pub viewer_interested: bool,
+    pub created_at: String,
+    pub updated_at: String,
+    pub last_activity_at: String,
+    pub edited_at: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export_to = "dto.ts")]
+pub struct ListCommunityPostsResp {
+    pub items: Vec<CommunityPostResp>,
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export_to = "dto.ts")]
+pub struct CreateCommunityPostRequest {
+    pub section_id: String,
+    pub post_type: CommunityPostType,
+    pub title: String,
+    pub body: String,
+    pub image_asset_ids: Vec<String>,
+    pub discussed_event_id: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export_to = "dto.ts")]
+pub struct UpdateCommunityPostRequest {
+    pub section_id: String,
+    pub post_type: CommunityPostType,
+    pub title: String,
+    pub body: String,
+    pub image_asset_ids: Vec<String>,
+    pub discussed_event_id: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export_to = "dto.ts")]
+pub struct CommunityPostReactionResp {
+    pub interested: bool,
+    pub interest_count: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export_to = "dto.ts")]
+pub struct ConversationCapabilitiesResp {
+    pub can_read: bool,
+    pub can_send: bool,
+    pub can_upload: bool,
+    pub can_quote: bool,
+    pub can_manage: bool,
+    pub read_only_reason: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export_to = "dto.ts")]
+pub struct ConversationResp {
+    pub conversation_id: String,
+    pub kind: ConversationKind,
+    pub subject_id: String,
+    pub title: String,
+    pub status: String,
+    pub last_seq: i64,
+    pub message_count: i64,
+    pub last_message_preview: Option<String>,
+    pub last_message_at: Option<String>,
+    pub last_read_seq: i64,
+    pub unread_count: i64,
+    pub subscribed: bool,
+    pub capabilities: ConversationCapabilitiesResp,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export_to = "dto.ts")]
+pub struct ListConversationsResp {
+    pub items: Vec<ConversationResp>,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export_to = "dto.ts")]
+pub struct ConversationMessageResp {
+    pub message_id: String,
+    pub conversation_id: String,
+    pub seq: i64,
+    pub sender_id: String,
+    pub sender_username: String,
+    pub sender_avatar_asset_id: Option<String>,
+    pub client_message_id: String,
+    pub message_type: String,
+    pub body: String,
+    pub image_asset_ids: Vec<String>,
+    pub quote_message_id: Option<String>,
+    pub created_at: String,
+    pub edited_at: Option<String>,
+    pub deleted_at: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export_to = "dto.ts")]
+pub struct ListConversationMessagesResp {
+    pub items: Vec<ConversationMessageResp>,
+    pub next_before_seq: Option<i64>,
+    pub next_after_seq: Option<i64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export_to = "dto.ts")]
+pub struct SendConversationMessageRequest {
+    pub client_message_id: String,
+    pub body: String,
+    pub image_asset_ids: Vec<String>,
+    pub quote_message_id: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export_to = "dto.ts")]
+pub struct MarkConversationReadRequest {
+    pub last_read_seq: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export_to = "dto.ts")]
+pub struct SetConversationSubscriptionRequest {
+    pub subscribed: bool,
+    pub muted: bool,
+}

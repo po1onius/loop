@@ -99,24 +99,31 @@ pub async fn refresh(
     let token_hash = hash_refresh_token(&req.refresh_token);
     let attempt = db_conn!()
         .transaction::<RefreshAttempt, HttpErr, _>(async |conn| {
+            // 先定位并锁定 token family，再消费当前 token。相同 family 的刷新、
+            // 重放检测和注销因此严格串行，不会在轮换与撤销之间留下竞态窗口。
+            let known_token = RefreshTokens::select_by_token_hash(&token_hash, conn)
+                .await
+                .internal(DB_ERROR)?;
+            let Some(known_token) = known_token else {
+                return Ok(RefreshAttempt::Invalid);
+            };
+            RefreshTokens::lock_family(known_token.family_id, conn)
+                .await
+                .internal(DB_ERROR)?;
+
             let Some(refresh_token) = RefreshTokens::consume_by_token_hash(&token_hash, conn)
                 .await
                 .internal(DB_ERROR)?
             else {
                 // 哈希存在但已经被消费，说明同一 refresh token 被重复使用。此时撤销
                 // 整个 token family 的活跃成员，阻断窃取者与合法客户端之间的刷新竞态。
-                let reused = RefreshTokens::select_by_token_hash(&token_hash, conn)
-                    .await
-                    .internal(DB_ERROR)?;
-                let Some(reused) = reused else {
-                    return Ok(RefreshAttempt::Invalid);
-                };
-                let revoked_count = RefreshTokens::revoke_active_family(reused.family_id, conn)
-                    .await
-                    .internal(DB_ERROR)?;
+                let revoked_count =
+                    RefreshTokens::revoke_active_family(known_token.family_id, conn)
+                        .await
+                        .internal(DB_ERROR)?;
                 return Ok(RefreshAttempt::Reused {
-                    family_id: reused.family_id,
-                    user_id: reused.user_id,
+                    family_id: known_token.family_id,
+                    user_id: known_token.user_id,
                     revoked_count,
                 });
             };
@@ -174,6 +181,55 @@ pub async fn refresh(
             ))
         }
     }
+}
+
+#[tracing::instrument(
+    name = "user.logout",
+    skip_all,
+    fields(user.id = tracing::field::Empty)
+)]
+pub async fn logout(Json(req): Json<RefreshTokenRequest>) -> Result<StatusCode, HttpErr> {
+    let token_hash = hash_refresh_token(&req.refresh_token);
+    let revoked = db_conn!()
+        .transaction::<Option<(i64, Uuid, usize)>, HttpErr, _>(async |conn| {
+            let refresh_token = RefreshTokens::select_by_token_hash(&token_hash, conn)
+                .await
+                .internal(DB_ERROR)?;
+            let Some(refresh_token) = refresh_token else {
+                // 注销保持幂等，不通过响应暴露 refresh token 是否曾经存在。
+                return Ok(None);
+            };
+            RefreshTokens::lock_family(refresh_token.family_id, conn)
+                .await
+                .internal(DB_ERROR)?;
+            let revoked_count = RefreshTokens::revoke_active_family(refresh_token.family_id, conn)
+                .await
+                .internal(DB_ERROR)?;
+            Ok(Some((
+                refresh_token.user_id,
+                refresh_token.family_id,
+                revoked_count,
+            )))
+        })
+        .await?;
+
+    if let Some((user_id, family_id, revoked_count)) = revoked {
+        tracing::Span::current().record("user.id", user_id);
+        tracing::info!(
+            event = "user.logout.completed",
+            user_id,
+            refresh_family_id = %family_id,
+            revoked_count,
+            "current login session revoked"
+        );
+    } else {
+        tracing::info!(
+            event = "user.logout.idempotent",
+            "logout requested for an unknown refresh token"
+        );
+    }
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[tracing::instrument(
@@ -459,6 +515,7 @@ pub fn route(state: AppState) -> AppRoutes {
             patch(update_current_user_avatar),
         )
         .public(Method::POST, "/user/login", post(login))
+        .public(Method::POST, "/user/logout", post(logout))
         .public(Method::POST, "/user/refresh_token", post(refresh))
         .public(Method::POST, "/user/register", post(register))
         .public(Method::POST, "/user/verify_code", post(verify_code))

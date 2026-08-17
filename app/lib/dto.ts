@@ -69,3 +69,35 @@ export type SetTokenRequest = { user_id: string, num: bigint, };
 export type VerifyCodeRequest = { account: string, };
 
 export type VerifyCodeResp = Record<symbol, never>;
+
+export type CommunityPostType = "event_idea" | "event_discussion" | "general";
+
+export type ConversationKind = "post_thread" | "event_group";
+
+export type CommunitySectionResp = { section_id: string, name: string, description: string, };
+
+export type CommunityPostResp = { post_id: string, author_id: string, author_username: string, author_avatar_asset_id: string | null, section_id: string, section_name: string, post_type: CommunityPostType, title: string, body: string, image_asset_ids: Array<string>, discussion_conversation_id: string, discussion_count: bigint, interest_count: bigint, viewer_interested: boolean, created_at: string, updated_at: string, last_activity_at: string, edited_at: string | null, };
+
+export type ListCommunityPostsResp = { items: Array<CommunityPostResp>, next_cursor: string | null, };
+
+export type CreateCommunityPostRequest = { section_id: string, post_type: CommunityPostType, title: string, body: string, image_asset_ids: Array<string>, discussed_event_id: string | null, };
+
+export type UpdateCommunityPostRequest = { section_id: string, post_type: CommunityPostType, title: string, body: string, image_asset_ids: Array<string>, discussed_event_id: string | null, };
+
+export type CommunityPostReactionResp = { interested: boolean, interest_count: bigint, };
+
+export type ConversationCapabilitiesResp = { can_read: boolean, can_send: boolean, can_upload: boolean, can_quote: boolean, can_manage: boolean, read_only_reason: string | null, };
+
+export type ConversationResp = { conversation_id: string, kind: ConversationKind, subject_id: string, title: string, status: string, last_seq: bigint, message_count: bigint, last_message_preview: string | null, last_message_at: string | null, last_read_seq: bigint, unread_count: bigint, subscribed: boolean, capabilities: ConversationCapabilitiesResp, };
+
+export type ListConversationsResp = { items: Array<ConversationResp>, };
+
+export type ConversationMessageResp = { message_id: string, conversation_id: string, seq: bigint, sender_id: string, sender_username: string, sender_avatar_asset_id: string | null, client_message_id: string, message_type: string, body: string, image_asset_ids: Array<string>, quote_message_id: string | null, created_at: string, edited_at: string | null, deleted_at: string | null, };
+
+export type ListConversationMessagesResp = { items: Array<ConversationMessageResp>, next_before_seq: bigint | null, next_after_seq: bigint | null, };
+
+export type SendConversationMessageRequest = { client_message_id: string, body: string, image_asset_ids: Array<string>, quote_message_id: string | null, };
+
+export type MarkConversationReadRequest = { last_read_seq: bigint, };
+
+export type SetConversationSubscriptionRequest = { subscribed: boolean, muted: boolean, };

@@ -230,6 +230,33 @@ impl RefreshTokens {
     }
 
     #[tracing::instrument(
+        name = "db.refresh_token.family.lock",
+        skip(conn),
+        fields(
+            db.system = "postgresql",
+            db.operation = "select_for_update",
+            db.table = "refresh_tokens",
+            auth.refresh_family_id = %family_id,
+        )
+    )]
+    pub async fn lock_family(
+        family_id: Uuid,
+        conn: &mut DieselConn,
+    ) -> Result<(), diesel::result::Error> {
+        // 每个 family 最早创建的 token 永久保留为稳定锁行。刷新、重放检测和注销
+        // 都先锁这一行，从而按整个登录会话串行化，避免只锁当前 token 时漏掉并发
+        // 轮换刚插入的新 token。
+        refresh_tokens::table
+            .filter(refresh_tokens::family_id.eq(family_id))
+            .order(refresh_tokens::id.asc())
+            .for_update()
+            .select(refresh_tokens::id)
+            .first::<i64>(conn)
+            .await
+            .map(|_| ())
+    }
+
+    #[tracing::instrument(
         name = "db.refresh_token.family.revoke",
         skip(conn),
         fields(

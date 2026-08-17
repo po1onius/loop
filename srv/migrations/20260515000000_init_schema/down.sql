@@ -1,3 +1,11 @@
+DROP TABLE content_reports;
+DROP TABLE community_post_event_links;
+DROP TABLE community_post_reactions;
+DROP TABLE conversation_read_states;
+DROP TABLE conversation_messages;
+DROP TABLE community_posts;
+DROP TABLE conversations;
+DROP TABLE community_sections;
 DROP TABLE event_participations;
 DROP TRIGGER trg_events_updated_at ON events;
 DROP FUNCTION set_events_updated_at();

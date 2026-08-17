@@ -41,6 +41,27 @@ services:
       - minio-init
       - otel-collector
 
+  realtime-svc:
+    container_name: loop-realtime-svc
+    build:
+      context: ../..
+      dockerfile: srv/loop-realtime-svc/Dockerfile
+    image: loop-realtime-svc:standalone
+    user: "0"
+    environment:
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://otel-collector:4317
+      DATABASE_URL: "postgresql://${PGUSER:?missing PGUSER}:${PGPASSWORD:?missing PGPASSWORD}@db:5432/${PGDATABASE:?missing PGDATABASE}"
+      REDIS_URL: "redis://:${LOOP_REDIS_PASSWORD:?missing LOOP_REDIS_PASSWORD}@cache:6379"
+    volumes:
+      - "${LOOP_HOST_SECRETS_DIR:?missing LOOP_HOST_SECRETS_DIR}/jwt_public.pem:/etc/loop/secrets/jwt_public.pem:ro"
+      - "${LOOP_HOST_LOG_DIR:-../../srv/log}:/app/log"
+    ports:
+      - "${LOOP_REALTIME_SVC_PORT:-3010}:3010"
+    depends_on:
+      - db
+      - cache
+      - otel-collector
+
   db:
     container_name: loop-pgsql
     image: docker.io/postgres:18.4

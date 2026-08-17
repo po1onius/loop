@@ -185,3 +185,180 @@ ON event_participations(user_id, status);
 
 CREATE INDEX idx_event_participations_event_status_requested_at
 ON event_participations(event_id, status, requested_at);
+
+-- 社区板块由数据库维护，便于后续增加后台排序和停用能力。section_id 使用稳定的
+-- 业务字符串，客户端路由和筛选条件不依赖展示名称。
+CREATE TABLE community_sections (
+    section_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT community_sections_id_not_empty CHECK (length(btrim(section_id)) > 0),
+    CONSTRAINT community_sections_name_not_empty CHECK (length(btrim(name)) > 0),
+    CONSTRAINT community_sections_status_allowed CHECK (status IN ('active', 'disabled'))
+);
+
+INSERT INTO community_sections (section_id, name, description, sort_order)
+VALUES
+    ('tech', '科技', 'Web3、AI、开发者交流与线下分享。', 10),
+    ('food', '美食', '探店、烘焙、咖啡和城市餐桌活动。', 20),
+    ('photo', '摄影', '约拍、器材经验和主题创作活动。', 30),
+    ('outdoor', '户外', '徒步、骑行、飞盘和周末轻运动。', 40);
+
+-- conversations 是帖子讨论与未来活动群聊共用的会话内核。subject_id 保存对应
+-- 业务实体的 UUID 字符串；活动目前仍使用 BIGINT，因此统一用 TEXT 承载且不建外键。
+CREATE TABLE conversations (
+    conversation_id UUID PRIMARY KEY,
+    kind TEXT NOT NULL,
+    subject_id TEXT NOT NULL,
+    access_mode TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    title TEXT NOT NULL,
+    last_seq BIGINT NOT NULL DEFAULT 0,
+    message_count BIGINT NOT NULL DEFAULT 0,
+    last_message_preview TEXT,
+    last_message_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT conversations_subject_key UNIQUE (kind, subject_id),
+    CONSTRAINT conversations_kind_allowed CHECK (kind IN ('post_thread', 'event_group')),
+    CONSTRAINT conversations_access_mode_allowed CHECK (access_mode IN ('open', 'restricted')),
+    CONSTRAINT conversations_status_allowed CHECK (status IN ('active', 'locked', 'hidden')),
+    CONSTRAINT conversations_title_not_empty CHECK (length(btrim(title)) > 0),
+    CONSTRAINT conversations_counters_nonnegative CHECK (last_seq >= 0 AND message_count >= 0)
+);
+
+CREATE INDEX idx_conversations_last_message_at
+ON conversations(last_message_at DESC NULLS LAST, conversation_id DESC);
+
+CREATE TABLE community_posts (
+    post_id UUID PRIMARY KEY,
+    author_id BIGINT NOT NULL,
+    section_id TEXT NOT NULL,
+    post_type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    image_asset_ids TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+    status TEXT NOT NULL DEFAULT 'published',
+    discussion_conversation_id UUID NOT NULL,
+    discussion_count BIGINT NOT NULL DEFAULT 0,
+    interest_count BIGINT NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_activity_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    edited_at TIMESTAMPTZ,
+    CONSTRAINT community_posts_conversation_key UNIQUE (discussion_conversation_id),
+    CONSTRAINT community_posts_type_allowed CHECK (post_type IN ('event_idea', 'event_discussion', 'general')),
+    CONSTRAINT community_posts_status_allowed CHECK (status IN ('published', 'hidden', 'deleted')),
+    CONSTRAINT community_posts_title_not_empty CHECK (length(btrim(title)) > 0),
+    CONSTRAINT community_posts_title_len CHECK (char_length(title) <= 120),
+    CONSTRAINT community_posts_body_not_empty CHECK (length(btrim(body)) > 0),
+    CONSTRAINT community_posts_body_len CHECK (char_length(body) <= 10000),
+    CONSTRAINT community_posts_image_count CHECK (cardinality(image_asset_ids) <= 9),
+    CONSTRAINT community_posts_counters_nonnegative CHECK (discussion_count >= 0 AND interest_count >= 0)
+);
+
+CREATE INDEX idx_community_posts_section_created
+ON community_posts(section_id, created_at DESC, post_id DESC)
+WHERE status = 'published';
+
+CREATE INDEX idx_community_posts_activity
+ON community_posts(last_activity_at DESC, post_id DESC)
+WHERE status = 'published';
+
+CREATE INDEX idx_community_posts_author_created
+ON community_posts(author_id, created_at DESC, post_id DESC)
+WHERE status = 'published';
+
+CREATE INDEX idx_community_posts_image_assets
+ON community_posts USING GIN(image_asset_ids);
+
+CREATE TABLE conversation_messages (
+    message_id UUID PRIMARY KEY,
+    conversation_id UUID NOT NULL,
+    seq BIGINT NOT NULL,
+    sender_id BIGINT NOT NULL,
+    client_message_id UUID NOT NULL,
+    message_type TEXT NOT NULL DEFAULT 'text',
+    body TEXT NOT NULL DEFAULT '',
+    image_asset_ids TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+    quote_message_id UUID,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    edited_at TIMESTAMPTZ,
+    deleted_at TIMESTAMPTZ,
+    CONSTRAINT conversation_messages_seq_key UNIQUE (conversation_id, seq),
+    CONSTRAINT conversation_messages_client_key UNIQUE (sender_id, client_message_id),
+    CONSTRAINT conversation_messages_seq_positive CHECK (seq > 0),
+    CONSTRAINT conversation_messages_type_allowed CHECK (message_type IN ('text', 'image', 'system')),
+    CONSTRAINT conversation_messages_body_len CHECK (char_length(body) <= 2000),
+    CONSTRAINT conversation_messages_image_count CHECK (cardinality(image_asset_ids) <= 4),
+    CONSTRAINT conversation_messages_content_present CHECK (
+        message_type = 'system' OR length(btrim(body)) > 0 OR cardinality(image_asset_ids) > 0
+    )
+);
+
+CREATE INDEX idx_conversation_messages_timeline
+ON conversation_messages(conversation_id, seq DESC);
+
+CREATE INDEX idx_conversation_messages_sender_created
+ON conversation_messages(sender_id, created_at DESC);
+
+CREATE TABLE conversation_read_states (
+    conversation_id UUID NOT NULL,
+    user_id BIGINT NOT NULL,
+    last_read_seq BIGINT NOT NULL DEFAULT 0,
+    subscribed BOOLEAN NOT NULL DEFAULT FALSE,
+    muted BOOLEAN NOT NULL DEFAULT FALSE,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (conversation_id, user_id),
+    CONSTRAINT conversation_read_states_seq_nonnegative CHECK (last_read_seq >= 0)
+);
+
+CREATE INDEX idx_conversation_read_states_user_subscribed
+ON conversation_read_states(user_id, updated_at DESC)
+WHERE subscribed = TRUE;
+
+CREATE TABLE community_post_reactions (
+    post_id UUID NOT NULL,
+    user_id BIGINT NOT NULL,
+    reaction_type TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (post_id, user_id, reaction_type),
+    CONSTRAINT community_post_reactions_type_allowed CHECK (reaction_type IN ('interested'))
+);
+
+CREATE INDEX idx_community_post_reactions_user_created
+ON community_post_reactions(user_id, created_at DESC);
+
+CREATE TABLE community_post_event_links (
+    post_id UUID NOT NULL,
+    event_id BIGINT NOT NULL,
+    relation_type TEXT NOT NULL,
+    created_by BIGINT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (post_id, event_id, relation_type),
+    CONSTRAINT community_post_event_links_relation_allowed CHECK (relation_type IN ('discusses', 'spawned_event'))
+);
+
+CREATE INDEX idx_community_post_event_links_event
+ON community_post_event_links(event_id, relation_type);
+
+CREATE TABLE content_reports (
+    report_id UUID PRIMARY KEY,
+    reporter_id BIGINT NOT NULL,
+    target_type TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    reviewed_at TIMESTAMPTZ,
+    reviewed_by BIGINT,
+    CONSTRAINT content_reports_target_allowed CHECK (target_type IN ('community_post', 'conversation_message')),
+    CONSTRAINT content_reports_reason_not_empty CHECK (length(btrim(reason)) > 0),
+    CONSTRAINT content_reports_status_allowed CHECK (status IN ('pending', 'resolved', 'dismissed'))
+);
+
+CREATE INDEX idx_content_reports_status_created
+ON content_reports(status, created_at ASC);

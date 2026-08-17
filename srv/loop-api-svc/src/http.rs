@@ -3,7 +3,7 @@ pub mod middleware;
 mod util;
 
 use crate::http::{
-    api::{event, media, user},
+    api::{community, event, media, user},
     middleware::{ApiRule, RouteAccess},
 };
 use axum::{Router, routing::MethodRouter};
@@ -167,6 +167,7 @@ pub fn route(state: AppState) -> AppRoutes {
         "/loop",
         AppRoutes::empty()
             .merge(user::route(state.clone()))
+            .merge(community::route(state.clone()))
             .merge(event::route(state.clone()))
             .merge(media::route(state)),
     )
@@ -176,6 +177,10 @@ pub fn route(state: AppState) -> AppRoutes {
 pub enum ErrorCode {
     AlreadyExist,
     AuthContextMissing,
+    CommunityPostNotFound,
+    CommunitySectionNotFound,
+    ConversationLocked,
+    ConversationNotFound,
     DbError,
     EmailSendError,
     EventCapacityReached,
@@ -211,6 +216,10 @@ impl ErrorCode {
         match self {
             Self::AlreadyExist => "already_exist",
             Self::AuthContextMissing => "auth_context_missing",
+            Self::CommunityPostNotFound => "community_post_not_found",
+            Self::CommunitySectionNotFound => "community_section_not_found",
+            Self::ConversationLocked => "conversation_locked",
+            Self::ConversationNotFound => "conversation_not_found",
             Self::DbError => "db_error",
             Self::EmailSendError => "email_send_error",
             Self::EventCapacityReached => "event_capacity_reached",
@@ -254,6 +263,10 @@ pub mod err_key {
 
     pub const ALREADY_EXIST: ErrorCode = ErrorCode::AlreadyExist;
     pub const AUTH_CONTEXT_MISSING: ErrorCode = ErrorCode::AuthContextMissing;
+    pub const COMMUNITY_POST_NOT_FOUND: ErrorCode = ErrorCode::CommunityPostNotFound;
+    pub const COMMUNITY_SECTION_NOT_FOUND: ErrorCode = ErrorCode::CommunitySectionNotFound;
+    pub const CONVERSATION_LOCKED: ErrorCode = ErrorCode::ConversationLocked;
+    pub const CONVERSATION_NOT_FOUND: ErrorCode = ErrorCode::ConversationNotFound;
     pub const DB_ERROR: ErrorCode = ErrorCode::DbError;
     pub const EMAIL_SEND_ERROR: ErrorCode = ErrorCode::EmailSendError;
     pub const EVENT_CAPACITY_REACHED: ErrorCode = ErrorCode::EventCapacityReached;

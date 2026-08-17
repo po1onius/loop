@@ -9,6 +9,7 @@ import type {
   VerifyCodeResp,
 } from "@/lib/dto";
 import {
+  AuthenticationSessionChangedError,
   configureAuthSessionHandlers,
   hasAccessToken,
   refreshAccessTokenIfNeeded,
@@ -27,6 +28,7 @@ import {
 let currentRefreshSession: StoredRefreshSession | null = null;
 let refreshSessionLoaded = false;
 let refreshSessionLoadPromise: Promise<StoredRefreshSession | null> | null = null;
+let authSessionGeneration = 0;
 
 function toBigInt(value: number | string | bigint, field: string): bigint {
   try {
@@ -50,13 +52,16 @@ export async function login(params: LoginRequest): Promise<LoginResp> {
     body: params,
   });
   const normalized = normalizeLoginResp(resp);
-  await applyTokenPair(normalized);
+  // 新登录会话取代之前可能仍在返回途中的刷新操作。
+  authSessionGeneration += 1;
+  await applyTokenPair(normalized, authSessionGeneration);
   return normalized;
 }
 
 export async function refreshToken(
   params: RefreshTokenRequest,
 ): Promise<LoginResp> {
+  const expectedGeneration = authSessionGeneration;
   const resp = await requestJson<RefreshTokenRequest, LoginResp>(
     "/user/refresh_token",
     {
@@ -65,8 +70,58 @@ export async function refreshToken(
     },
   );
   const normalized = normalizeLoginResp(resp);
-  await applyTokenPair(normalized);
+  await applyTokenPair(normalized, expectedGeneration);
   return normalized;
+}
+
+export async function logout(): Promise<void> {
+  const session = await ensureRefreshSessionLoaded();
+
+  // 先使当前代次失效并清除内存 token，保证点击注销后不会再发出新的鉴权请求；
+  // 已经在途的刷新响应也会因代次不匹配而被丢弃。
+  authSessionGeneration += 1;
+  currentRefreshSession = null;
+  refreshSessionLoaded = true;
+  setAccessToken(null);
+  console.info("[auth-api] local authentication session invalidated for logout", {
+    hasRefreshToken: Boolean(session),
+  });
+
+  try {
+    // 先清安全存储再访问网络，避免请求期间进程被系统终止后，下次启动又恢复
+    // 已经选择注销的会话。服务端撤销仍使用上方保留在内存中的 token 副本。
+    await clearStoredRefreshSession();
+  } catch (error) {
+    // 清理失败时恢复内存中的 refresh session，使用户可以再次点击注销；不能在
+    // 磁盘凭证仍存在的情况下对 UI 谎报注销成功。
+    currentRefreshSession = session;
+    console.warn("[auth-api] local refresh session cleanup failed", {
+      reason: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
+
+  let remoteLogoutError: unknown = null;
+  try {
+    if (session) {
+      await requestJson<RefreshTokenRequest, void>("/user/logout", {
+        method: "POST",
+        body: { refresh_token: session.refreshToken },
+      });
+      console.info("[auth-api] server authentication session revoked");
+    }
+  } catch (error) {
+    // 本机注销不能被临时网络问题阻断；服务端 token 最迟会按 refresh TTL
+    // 自动过期，且本机已经不再持有其明文。完整原因保留在日志中便于排查。
+    remoteLogoutError = error;
+    console.warn("[auth-api] server session revocation failed", {
+      reason: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  console.info("[auth-api] logout completed", {
+    serverSessionRevoked: remoteLogoutError === null,
+  });
 }
 
 export async function restoreAuthSession(): Promise<boolean> {
@@ -123,21 +178,25 @@ async function refreshAccessTokenFromSession(
   await refreshToken({ refresh_token: session.refreshToken });
 }
 
-async function applyTokenPair(resp: LoginResp): Promise<void> {
+async function applyTokenPair(
+  resp: LoginResp,
+  expectedGeneration: number,
+): Promise<void> {
+  if (expectedGeneration !== authSessionGeneration) {
+    throw new AuthenticationSessionChangedError();
+  }
   const refreshTtlSeconds = normalizePositiveTtl(
     resp.refresh_exp,
     "refresh_exp",
   );
-  currentRefreshSession = {
+  const nextRefreshSession: StoredRefreshSession = {
     refreshToken: resp.refresh_token,
     refreshExpiresAtMs: Date.now() + refreshTtlSeconds * 1000,
   };
-  refreshSessionLoaded = true;
-  setAccessToken(resp.access_token, resp.expires_in);
 
   try {
     // refresh token 每次使用都会轮换，必须用新值覆盖安全存储中的旧值。
-    await saveStoredRefreshSession(currentRefreshSession);
+    await saveStoredRefreshSession(nextRefreshSession);
   } catch (error) {
     console.warn("[auth-api] rotated refresh session persistence failed", {
       reason: error instanceof Error ? error.message : String(error),
@@ -151,6 +210,21 @@ async function applyTokenPair(resp: LoginResp): Promise<void> {
       });
     });
   }
+
+  if (expectedGeneration !== authSessionGeneration) {
+    // 持久化期间若发生注销，删除刚写入的过期代次；若已经建立了更新会话，
+    // 则重新写入当前会话，避免较晚完成的旧写操作覆盖新 refresh token。
+    if (currentRefreshSession) {
+      await saveStoredRefreshSession(currentRefreshSession);
+    } else {
+      await clearStoredRefreshSession();
+    }
+    throw new AuthenticationSessionChangedError();
+  }
+
+  currentRefreshSession = nextRefreshSession;
+  refreshSessionLoaded = true;
+  setAccessToken(resp.access_token, resp.expires_in);
 }
 
 async function ensureRefreshSessionLoaded(): Promise<StoredRefreshSession | null> {
@@ -174,6 +248,7 @@ async function ensureRefreshSessionLoaded(): Promise<StoredRefreshSession | null
 }
 
 async function clearRefreshSession(): Promise<void> {
+  authSessionGeneration += 1;
   currentRefreshSession = null;
   refreshSessionLoaded = true;
   setAccessToken(null);

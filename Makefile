@@ -60,4 +60,8 @@ backend-up:
 	export LOOP_ENV="$${LOOP_ENV:-local}"; \
 	export LOOP_LOG_DIR="$${host_log_dir}"; \
 	export OTEL_EXPORTER_OTLP_TRACES_ENDPOINT="$${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:-http://127.0.0.1:$${LOOP_OTEL_GRPC_PORT:-4317}}"; \
-	cd "$(SRV_DIR)" && $(CARGO) run -p loop-api-svc
+	cd "$(SRV_DIR)"; \
+	LOOP_HTTP_ADDR="0.0.0.0:$${LOOP_REALTIME_SVC_PORT:-3010}" $(CARGO) run -p loop-realtime-svc & \
+	realtime_pid="$$!"; \
+	trap 'kill "$${realtime_pid}" >/dev/null 2>&1 || true; wait "$${realtime_pid}" >/dev/null 2>&1 || true' EXIT INT TERM; \
+	$(CARGO) run -p loop-api-svc

@@ -23,6 +23,7 @@ const MAPPING = {
   "house.fill": "home",
   "message.fill": "chat",
   "paperplane.fill": "send",
+  photo: "image",
   "person.crop.circle": "account-circle",
   "person.fill": "person",
   "person.text.rectangle": "badge",

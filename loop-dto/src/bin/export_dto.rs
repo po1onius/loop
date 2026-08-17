@@ -1,13 +1,18 @@
 use std::{fs, io, path::PathBuf};
 
 use loop_dto::{
-    CompleteMediaUploadResp, CreateEventDraftRequest, CreateEventRequest, CreateMediaUploadRequest,
-    CreateMediaUploadResp, CurrentUserResp, EventContentBlock, EventContentDoc, EventContentImage,
-    EventFeatureBlock, EventInlineNode, EventJoinRequestResp, EventJoinReviewDecision,
-    EventParticipationResp, EventParticipationStateResp, EventParticipationStatus, EventResp,
-    EventStatus, EventTextColor, EventTextMark, ListEventJoinRequestsResp, ListEventsResp,
-    LoginRequest, LoginResp, MediaAssetResp, MediaDownloadUrlResp, PresignedHeader,
-    RefreshTokenRequest, RegisterRequest, ReviewEventJoinRequest, SetTokenRequest,
+    CommunityPostReactionResp, CommunityPostResp, CommunityPostType, CommunitySectionResp,
+    CompleteMediaUploadResp, ConversationCapabilitiesResp, ConversationKind,
+    ConversationMessageResp, ConversationResp, CreateCommunityPostRequest, CreateEventDraftRequest,
+    CreateEventRequest, CreateMediaUploadRequest, CreateMediaUploadResp, CurrentUserResp,
+    EventContentBlock, EventContentDoc, EventContentImage, EventFeatureBlock, EventInlineNode,
+    EventJoinRequestResp, EventJoinReviewDecision, EventParticipationResp,
+    EventParticipationStateResp, EventParticipationStatus, EventResp, EventStatus, EventTextColor,
+    EventTextMark, ListCommunityPostsResp, ListConversationMessagesResp, ListConversationsResp,
+    ListEventJoinRequestsResp, ListEventsResp, LoginRequest, LoginResp,
+    MarkConversationReadRequest, MediaAssetResp, MediaDownloadUrlResp, PresignedHeader,
+    RefreshTokenRequest, RegisterRequest, ReviewEventJoinRequest, SendConversationMessageRequest,
+    SetConversationSubscriptionRequest, SetTokenRequest, UpdateCommunityPostRequest,
     UpdateEventDraftRequest, UpdateUserAvatarRequest, VerifyCodeRequest, VerifyCodeResp,
 };
 use ts_rs::{Config, TS};
@@ -57,6 +62,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     append::<SetTokenRequest>(&cfg, &mut declarations)?;
     append::<VerifyCodeRequest>(&cfg, &mut declarations)?;
     append::<VerifyCodeResp>(&cfg, &mut declarations)?;
+    append::<CommunityPostType>(&cfg, &mut declarations)?;
+    append::<ConversationKind>(&cfg, &mut declarations)?;
+    append::<CommunitySectionResp>(&cfg, &mut declarations)?;
+    append::<CommunityPostResp>(&cfg, &mut declarations)?;
+    append::<ListCommunityPostsResp>(&cfg, &mut declarations)?;
+    append::<CreateCommunityPostRequest>(&cfg, &mut declarations)?;
+    append::<UpdateCommunityPostRequest>(&cfg, &mut declarations)?;
+    append::<CommunityPostReactionResp>(&cfg, &mut declarations)?;
+    append::<ConversationCapabilitiesResp>(&cfg, &mut declarations)?;
+    append::<ConversationResp>(&cfg, &mut declarations)?;
+    append::<ListConversationsResp>(&cfg, &mut declarations)?;
+    append::<ConversationMessageResp>(&cfg, &mut declarations)?;
+    append::<ListConversationMessagesResp>(&cfg, &mut declarations)?;
+    append::<SendConversationMessageRequest>(&cfg, &mut declarations)?;
+    append::<MarkConversationReadRequest>(&cfg, &mut declarations)?;
+    append::<SetConversationSubscriptionRequest>(&cfg, &mut declarations)?;
 
     let dto_path = cfg.out_dir().join("dto.ts");
     let mut output = String::from(

@@ -1,4 +1,5 @@
 pub mod account;
+pub mod community;
 pub mod event;
 
 use deadpool::managed::Object;

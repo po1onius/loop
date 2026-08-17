@@ -44,6 +44,13 @@ export class RefreshSessionExpiredError extends Error {
   }
 }
 
+export class AuthenticationSessionChangedError extends Error {
+  constructor(message = "authentication session changed") {
+    super(message);
+    this.name = "AuthenticationSessionChangedError";
+  }
+}
+
 type AccessTokenRefreshHandler = (
   reason: AccessTokenRefreshReason,
 ) => Promise<void>;
@@ -89,6 +96,15 @@ export function setAccessToken(
 
 export function hasAccessToken(): boolean {
   return Boolean(accessToken);
+}
+
+/** 长连接建立前也必须经过同一个 single-flight 刷新通道，不能读取过期 token。 */
+export async function getRealtimeAccessToken(): Promise<string> {
+  const result = await refreshAccessTokenIfNeeded("request");
+  if (result !== "ready" || !accessToken) {
+    throw new Error("登录凭证已过期，请重新登录");
+  }
+  return accessToken;
 }
 
 export function configureAuthSessionHandlers(handlers: {
@@ -149,6 +165,14 @@ async function refreshAccessToken(
         reason,
         error: error instanceof Error ? error.message : String(error),
       });
+      if (error instanceof AuthenticationSessionChangedError) {
+        // 用户主动注销或建立了新会话时，在途刷新结果必须被丢弃。这不是凭证
+        // 过期，不触发全局“登录已过期”提示，也不安排后台重试。
+        console.info("[api-client] obsolete token refresh discarded", {
+          reason,
+        });
+        return "session_expired";
+      }
       if (isRefreshCredentialRejection(error)) {
         invalidateAuthentication("refresh_failed");
         return "session_expired";
@@ -350,7 +374,7 @@ function parseJsonResponse<TResp>(text: string): TResp {
 }
 
 export type RequestJsonOptions<TReq> = {
-  method?: "GET" | "POST" | "PATCH" | "DELETE";
+  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   body?: TReq;
   headers?: Record<string, string>;
   auth?: boolean;

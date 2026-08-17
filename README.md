@@ -22,11 +22,23 @@ app目录下，使用`react native` + typescript实现的客户端app
 后端都在srv目录下，具体目录：
 
 1. loop-api-svc: 客户端主 HTTP API，承载账号、活动、媒体上传入口、报名、社区等普通请求/响应型业务
-2. loop-realtime-svc: 长连接运行时服务预留，后续承载 WebSocket、活动群聊、在线状态、消息投递等实时能力
+2. loop-realtime-svc: WebSocket 长连接服务，当前承载帖子讨论消息通知，后续复用到活动群聊、在线状态等实时能力
 3. loop-svc-model: 服务器数据结构以及相关数据库操作
 4. loop-infra: 数据库、Redis、对象存储、邮件、可观测性等基础设施封装
 
 后端服务按运行特征拆分，而不是按页面或业务名提前拆分。当前阶段普通业务优先沉淀在 `loop-api-svc` 的内部模块中，避免社区、活动、报名、用户关系等高耦合功能过早跨服务调用。只有长连接、异步任务、媒体处理、搜索索引、通知推送等运行模型明显不同的能力，才在需要时拆成独立进程或 worker。
+
+## 社区与会话模型
+
+社区以帖子为入口，但讨论交互使用类似 Telegram 的聊天线程，而不是嵌套评论：
+
+1. 创建帖子时，在同一数据库事务中创建一个 `post_thread` 会话
+2. 用户可以直接进入开放的帖子会话发言，不需要先申请加入群组
+3. `conversations` 和 `conversation_messages` 是通用会话内核，帖子只通过 `kind`、`subject_id` 绑定业务上下文；未来活动群聊继续复用相同消息、已读、引用和订阅接口
+4. 消息先写 PostgreSQL 并分配会话内单调递增的 `seq`，提交后再通过 Redis Pub/Sub 通知 WebSocket 服务
+5. 实时事件只携带会话、消息和序号标识，客户端收到后从 HTTP API 按 `seq` 回补正文；定期对账负责覆盖断线和 Redis Pub/Sub 的 at-most-once 投递窗口
+
+这种结构让 PostgreSQL 始终是消息事实来源，WebSocket 只是低延迟通知通道；帖子讨论与后续“聊天”模块共享同一套客户端会话组件。
 
 ## K8s 配置约定
 
@@ -45,10 +57,11 @@ Secret    -> /etc/loop/secrets/*
 | --- | --- |
 | `LOOP_CONFIG_FILE` | 普通配置 TOML 文件路径 |
 | `LOOP_HTTP_ADDR` | HTTP 监听地址，本地默认可用 `127.0.0.1:3000` |
-| `LOOP_PG_CONN` / `DATABASE_URL` | PostgreSQL 连接串 |
-| `LOOP_REDIS_CONN` / `REDIS_URL` | Redis 连接串 |
-| `LOOP_JWT_RSA_PRI_KEY_FILE` / `LOOP_JWT_RSA_PRIVATE_KEY_FILE` | JWT RSA 私钥文件 |
-| `LOOP_JWT_RSA_PUB_KEY_FILE` / `LOOP_JWT_RSA_PUBLIC_KEY_FILE` | JWT RSA 公钥文件 |
+| `LOOP_REALTIME_SVC_PORT` | 本地或单机部署的实时服务端口，默认 `3010` |
+| `DATABASE_URL` | PostgreSQL 连接串 |
+| `REDIS_URL` | Redis 连接串 |
+| `LOOP_JWT_RSA_PRI_KEY_FILE` | API 服务使用的 JWT RSA 私钥文件 |
+| `LOOP_JWT_RSA_PUB_KEY_FILE` | API 与 realtime 服务使用的 JWT RSA 公钥文件 |
 | `LOOP_ACCESS_TTL` | 覆盖 access token TTL |
 | `LOOP_REFRESH_TTL` | 覆盖 refresh token TTL |
 | `LOOP_PERM_VER` | 覆盖权限配置版本 |
@@ -80,7 +93,9 @@ user = [
   "event.join",
   "event.create",
   "media.upload",
+  "community.read",
   "community.post.create",
+  "community.message.create",
 ]
 
 organizer = [
@@ -91,6 +106,9 @@ organizer = [
   "event.create",
   "event.update_own",
   "media.upload",
+  "community.read",
+  "community.post.create",
+  "community.message.create",
 ]
 
 admin = [
@@ -142,19 +160,26 @@ refresh token 被重复使用时会撤销该 family 中仍活跃的 token，以�
 token 明确失效或被服务端拒绝时才清理会话并跳转登录页，临时断网和服务端 `5xx` 会
 保留会话并稍后重试。
 
+用户主动注销时，客户端会立即清除内存和系统安全存储中的登录令牌，并调用服务端撤销
+当前 token family。注销接口保持幂等且不暴露 refresh token 是否存在；其他设备上的
+独立登录会话不会受到影响。“记住密码”属于单独的本机登录辅助设置，不随注销清除。
+
 ## 本地开发
 
-仓库根目录提供 `Makefile` 封装常用命令：
+仓库根目录的 `Makefile` 会启动依赖、执行初始化 migration，并同时运行 API 与 realtime 服务。首次使用先准备单机环境文件和 JWT 密钥：
 
 ```bash
-make local-init
-cp deploy/local/.env.example deploy/local/.env
-make deps-up
-make db-migrate
-make dev-event
+cp deploy/standalone/examples/.env.example deploy/standalone/.env
+mkdir -p deploy/standalone/secrets srv/log
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 \
+  -out deploy/standalone/secrets/jwt_private.pem
+openssl rsa -pubout \
+  -in deploy/standalone/secrets/jwt_private.pem \
+  -out deploy/standalone/secrets/jwt_public.pem
+make backend-up
 ```
 
-`make deps-up` 会启动 Postgres、Redis 和 MinIO，并创建本地媒体 bucket `loop-local`。MinIO API 地址为 `http://127.0.0.1:9000`，控制台地址为 `http://127.0.0.1:9001`，本地账号为 `loopadmin` / `loopadmin123`。
+`make backend-up` 会启动 Postgres、Redis 和 MinIO，并创建本地媒体 bucket `loop-local`。MinIO API 地址为 `http://127.0.0.1:9000`，控制台地址为 `http://127.0.0.1:9001`，示例账号为 `loopadmin` / `loopadmin123`。
 
 如果使用 Android 真机上的 Expo Go 调试客户端，手机不能访问电脑上的 `127.0.0.1`。需要手动把本地服务地址配置成电脑局域网 IP，例如 `192.168.1.23`。
 
@@ -171,27 +196,33 @@ LOOP_S3_ENDPOINT_URL='http://<电脑局域网IP>:9000'
 LOOP_S3_PUBLIC_BASE_URL='http://<电脑局域网IP>:9000/loop-local'
 ```
 
-启动 Expo 前显式设置 API 地址：
+启动 Expo 前显式设置 API 和 WebSocket 地址：
 
 ```bash
-EXPO_PUBLIC_API_BASE_URL=http://<电脑局域网IP>:3000/loop npx expo start
+EXPO_PUBLIC_API_BASE_URL=http://<电脑局域网IP>:3000/loop \
+EXPO_PUBLIC_REALTIME_URL=ws://<电脑局域网IP>:3010/loop/realtime \
+npx expo start
 ```
 
-手机和电脑需要在同一局域网内，并确认防火墙允许手机访问电脑的 `3000` 和 `9000` 端口。
+手机和电脑需要在同一局域网内，并确认防火墙允许手机访问电脑的 `3000`、`3010` 和 `9000` 端口。未设置 `EXPO_PUBLIC_REALTIME_URL` 时客户端会退回短轮询，功能仍可使用，但跨设备消息会有数秒延迟。
 
-`make local-init` 会生成本地配置示例和 `deploy/local/secrets/` 目录。本地 MinIO 凭证在 `.env.example` 中直接使用字符串环境变量；需要自行放入 JWT RSA 私钥/公钥文件，并按需调整 `deploy/local/.env` 中的数据库、Redis、S3 endpoint、配置文件路径。
+`make backend-up` 会同时启动 API 服务和 realtime 服务；任一进程退出时会清理同一终端中启动的 realtime 子进程。
+
+单机示例中的 MinIO 凭证直接使用字符串环境变量；需要按实际环境调整 `deploy/standalone/.env` 中的数据库、Redis、S3 endpoint、配置文件路径和密码。
 
 `.env` 使用 shell `source` 加载，包含 `&`、空格等特殊字符的值需要加引号，例如 PostgreSQL URL。
 
-常用命令：
+静态检查命令：
 
 ```bash
-make db-status
-make db-migrate
-make fmt-check
-make check
-make clippy
-make test-event
+cd srv
+cargo fmt --all --check
+cargo check --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+
+cd ../app
+npx tsc --noEmit
+npm run lint
 ```
 
 开发阶段数据库 schema 只保留一份当前初始化 migration，迁移文件位于 `srv/migrations/`。本地执行初始化前需要安装 Diesel CLI：
@@ -200,7 +231,7 @@ make test-event
 cargo install diesel_cli --no-default-features --features postgres
 ```
 
-`make db-migrate` 会读取 `deploy/local/.env` 中的 `DATABASE_URL`，未设置时使用 `LOOP_PG_CONN` 并导出为 Diesel CLI 使用的 `DATABASE_URL`。当前仍处于开发阶段，数据库表结构、索引和约束以这份初始化 migration 为准；后续 schema 变更直接更新初始化脚本，并重建本地数据库，避免历史 migration 引入兼容分支和冗余逻辑。
+`make backend-up` 会根据 `deploy/standalone/.env` 组装 `DATABASE_URL` 并执行 migration。当前仍处于开发阶段，数据库表结构、索引和约束以这份初始化 migration 为准；初始化 migration 发生变更后需要手动重建本地开发数据库，再重新执行 `make backend-up`，避免历史 migration 引入兼容分支和冗余逻辑。
 
 ## 后端权限模型
 
@@ -226,7 +257,9 @@ user = [
   "event.join",
   "event.create",
   "media.upload",
+  "community.read",
   "community.post.create",
+  "community.message.create",
 ]
 
 organizer = [
@@ -237,6 +270,9 @@ organizer = [
   "event.create",
   "event.update_own",
   "media.upload",
+  "community.read",
+  "community.post.create",
+  "community.message.create",
 ]
 
 admin = [

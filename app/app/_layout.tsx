@@ -100,7 +100,16 @@ export default function RootLayout() {
         <Stack.Screen name="login" options={{ headerShown: false }} />
         <Stack.Screen name="register" options={{ headerShown: false }} />
         <Stack.Screen name="create-event" options={{ headerShown: false }} />
+        <Stack.Screen name="create-post" options={{ headerShown: false }} />
         <Stack.Screen name="event/[eventId]" options={{ headerShown: false }} />
+        <Stack.Screen
+          name="community/post/[postId]"
+          options={{ headerShown: false }}
+        />
+        <Stack.Screen
+          name="conversation/[conversationId]"
+          options={{ headerShown: false }}
+        />
         <Stack.Screen
           name="event/[eventId]/join-requests"
           options={{ headerShown: false }}
