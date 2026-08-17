@@ -4,14 +4,21 @@ import {
   ThemeProvider,
   type Theme,
 } from "@react-navigation/native";
-import { Stack } from "expo-router";
+import { router, Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import * as SystemUI from "expo-system-ui";
 import { useEffect, useMemo } from "react";
+import { AppState } from "react-native";
 import "react-native-reanimated";
 
 import { Colors } from "@/constants/theme";
 import { useColorScheme } from "@/hooks/use-color-scheme";
+import { hasRefreshSession, restoreAuthSession } from "@/lib/auth-api";
+import {
+  hasAccessToken,
+  refreshAccessTokenIfNeeded,
+  subscribeAuthenticationExpired,
+} from "@/lib/api-client";
 
 export const unstable_settings = {
   anchor: "(tabs)",
@@ -39,6 +46,51 @@ export default function RootLayout() {
       console.warn("[layout] system background update failed", error);
     });
   }, [screenBackground]);
+
+  useEffect(() => {
+    let active = true;
+    const unsubscribe = subscribeAuthenticationExpired((reason) => {
+      console.info("[layout] redirecting to login after session expiration", {
+        reason,
+      });
+      router.replace({
+        pathname: "/login",
+        params: { reason: "expired" },
+      } as never);
+    });
+    const appStateSubscription = AppState.addEventListener(
+      "change",
+      (nextState) => {
+        if (
+          nextState === "active" &&
+          (hasAccessToken() || hasRefreshSession())
+        ) {
+          // 移动系统会暂停后台 JS 定时器；恢复前台后如已进入刷新窗口，立即轮换
+          // token。没有本地 access token 的冷启动由 restoreAuthSession 负责。
+          const hadAccessToken = hasAccessToken();
+          void refreshAccessTokenIfNeeded("app_foreground").then((result) => {
+            if (!hadAccessToken && result === "ready") {
+              console.info("[layout] restored session after returning active");
+              router.replace("/(tabs)" as never);
+            }
+          });
+        }
+      },
+    );
+
+    void restoreAuthSession().then((restored) => {
+      if (!active || !restored) {
+        return;
+      }
+      console.info("[layout] restored session; entering app");
+      router.replace("/(tabs)" as never);
+    });
+    return () => {
+      active = false;
+      unsubscribe();
+      appStateSubscription.remove();
+    };
+  }, []);
 
   return (
     <ThemeProvider value={appTheme}>

@@ -40,6 +40,9 @@ CREATE TABLE refresh_tokens (
     id BIGSERIAL PRIMARY KEY,
     user_id BIGINT NOT NULL,
     token_hash TEXT NOT NULL,
+    -- 同一次登录后轮换出的 refresh token 共享 family_id；发现旧 token 重放时，
+    -- 可一次撤销该登录会话当前仍活跃的 token。按项目约定不添加数据库外键。
+    family_id UUID NOT NULL,
     device_id TEXT,
     expires_at TIMESTAMPTZ NOT NULL,
     revoked_at TIMESTAMPTZ,
@@ -53,6 +56,10 @@ CREATE TABLE refresh_tokens (
 
 CREATE INDEX idx_refresh_tokens_user_id
 ON refresh_tokens(user_id);
+
+CREATE INDEX idx_refresh_tokens_family_active
+ON refresh_tokens(family_id, revoked_at)
+WHERE revoked_at IS NULL;
 
 CREATE INDEX idx_refresh_tokens_expires_at
 ON refresh_tokens(expires_at);

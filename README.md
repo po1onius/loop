@@ -124,6 +124,24 @@ allowed_mime_types = ["image/jpeg", "image/png", "image/webp", "image/gif"]
 
 JWT 私钥、公钥、数据库密码、SMTP token、S3 secret access key 等敏感信息不要写入 ConfigMap，使用 K8s Secret 以环境变量或文件方式传入。
 
+## 登录令牌机制
+
+服务端采用短期 access token 与长期 refresh token 组合。默认 access token 有效期为
+`900` 秒（15 分钟），refresh token 有效期为 `2592000` 秒（30 天），可分别通过
+`LOOP_ACCESS_TTL` 和 `LOOP_REFRESH_TTL` 覆盖。每次成功刷新都会同时签发新的 access
+token 和 refresh token，并从签发时重新计算 refresh token 的 30 天有效期，因此当前
+登录会话采用滚动过期策略。
+
+refresh token 只以 SHA-256 哈希形式写入数据库，明文仅返回客户端；每个 refresh token
+只能消费一次。同一次登录轮换出的 token 属于同一个 token family，服务端检测到旧
+refresh token 被重复使用时会撤销该 family 中仍活跃的 token，以限制令牌泄露影响。
+
+移动客户端仅把 refresh token 写入系统安全存储，access token 只保存在内存中；Web
+端不把 refresh token 写入 `localStorage`。客户端会在 access token 到期前主动刷新，
+多个并发请求共享一次刷新操作；接口返回 `401` 时最多刷新并重试一次。只有 refresh
+token 明确失效或被服务端拒绝时才清理会话并跳转登录页，临时断网和服务端 `5xx` 会
+保留会话并稍后重试。
+
 ## 本地开发
 
 仓库根目录提供 `Makefile` 封装常用命令：

@@ -33,12 +33,24 @@ use loop_svc_model::{
 use rand::{Rng, rngs::ThreadRng};
 use redis::AsyncCommands;
 use sha2::{Digest, Sha256};
+use uuid::Uuid;
 
 const DEFAULT_USER_ROLE: &str = "user";
 const USER_PROFILE_READ_PERMISSION: &str = "user.profile.read";
 const USER_PROFILE_UPDATE_PERMISSION: &str = "user.profile.update";
 const VERIFY_CODE_TTL_SECONDS: u64 = 120;
 const VERIFY_CODE_EXPIRE_MINUTES: u64 = VERIFY_CODE_TTL_SECONDS / 60;
+
+enum RefreshAttempt {
+    Rotated(LoginResp),
+    Expired,
+    Invalid,
+    Reused {
+        family_id: Uuid,
+        user_id: i64,
+        revoked_count: usize,
+    },
+}
 
 #[tracing::instrument(
     name = "user.login",
@@ -65,7 +77,7 @@ pub async fn login(
 
     let (access_token, access_exp) = mint_access_token(&state, cur_user.user_id, cur_user.role)?;
     let (refresh_token, refresh_exp) =
-        mint_refresh_token(cur_user.user_id, &mut db_conn!()).await?;
+        mint_refresh_token(cur_user.user_id, None, &mut db_conn!()).await?;
     Ok(Json(LoginResp {
         access_token,
         expires_in: access_exp,
@@ -85,18 +97,32 @@ pub async fn refresh(
 ) -> Result<Json<LoginResp>, HttpErr> {
     let now = Utc::now();
     let token_hash = hash_refresh_token(&req.refresh_token);
-    db_conn!()
-        .transaction::<_, HttpErr, _>(async |conn| {
-            let refresh_token = RefreshTokens::consume_by_token_hash(&token_hash, conn)
+    let attempt = db_conn!()
+        .transaction::<RefreshAttempt, HttpErr, _>(async |conn| {
+            let Some(refresh_token) = RefreshTokens::consume_by_token_hash(&token_hash, conn)
                 .await
                 .internal(DB_ERROR)?
-                .client(StatusCode::BAD_REQUEST, INVALID_REFRESH_TOKEN)?;
+            else {
+                // 哈希存在但已经被消费，说明同一 refresh token 被重复使用。此时撤销
+                // 整个 token family 的活跃成员，阻断窃取者与合法客户端之间的刷新竞态。
+                let reused = RefreshTokens::select_by_token_hash(&token_hash, conn)
+                    .await
+                    .internal(DB_ERROR)?;
+                let Some(reused) = reused else {
+                    return Ok(RefreshAttempt::Invalid);
+                };
+                let revoked_count = RefreshTokens::revoke_active_family(reused.family_id, conn)
+                    .await
+                    .internal(DB_ERROR)?;
+                return Ok(RefreshAttempt::Reused {
+                    family_id: reused.family_id,
+                    user_id: reused.user_id,
+                    revoked_count,
+                });
+            };
 
             if refresh_token.expires_at <= now {
-                return Err(HttpErr::client(
-                    StatusCode::UNAUTHORIZED,
-                    REFRESH_TOKEN_EXPIRED,
-                ));
+                return Ok(RefreshAttempt::Expired);
             }
             tracing::Span::current().record("user.id", refresh_token.user_id);
 
@@ -109,15 +135,45 @@ pub async fn refresh(
             let (access_token, access_exp) =
                 mint_access_token(&state, refresh_token.user_id, user.role)?;
             let (new_refresh_token, refresh_exp) =
-                mint_refresh_token(refresh_token.user_id, conn).await?;
-            Ok(Json(LoginResp {
+                mint_refresh_token(refresh_token.user_id, Some(refresh_token.family_id), conn)
+                    .await?;
+            Ok(RefreshAttempt::Rotated(LoginResp {
                 access_token,
                 expires_in: access_exp,
                 refresh_token: new_refresh_token,
                 refresh_exp,
             }))
         })
-        .await
+        .await?;
+
+    match attempt {
+        RefreshAttempt::Rotated(resp) => Ok(Json(resp)),
+        RefreshAttempt::Expired => Err(HttpErr::client(
+            StatusCode::UNAUTHORIZED,
+            REFRESH_TOKEN_EXPIRED,
+        )),
+        RefreshAttempt::Invalid => Err(HttpErr::client(
+            StatusCode::UNAUTHORIZED,
+            INVALID_REFRESH_TOKEN,
+        )),
+        RefreshAttempt::Reused {
+            family_id,
+            user_id,
+            revoked_count,
+        } => {
+            tracing::warn!(
+                event = "user.refresh_token.reuse_detected",
+                user_id,
+                refresh_family_id = %family_id,
+                revoked_count,
+                "reused refresh token detected; active token family revoked"
+            );
+            Err(HttpErr::client(
+                StatusCode::UNAUTHORIZED,
+                INVALID_REFRESH_TOKEN,
+            ))
+        }
+    }
 }
 
 #[tracing::instrument(
@@ -151,17 +207,23 @@ fn mint_access_token(
     skip_all,
     fields(user.id = user_id)
 )]
-async fn mint_refresh_token(user_id: i64, conn: &mut DieselConn) -> Result<(String, i64), HttpErr> {
+async fn mint_refresh_token(
+    user_id: i64,
+    family_id: Option<Uuid>,
+    conn: &mut DieselConn,
+) -> Result<(String, i64), HttpErr> {
     let refresh_ttl = config().refresh_ttl;
     let ttl = Duration::seconds(refresh_ttl);
     let expires_at = Utc::now() + ttl;
 
     let raw = generate_refresh_token();
     let token_hash = hash_refresh_token(&raw);
+    let family_id = family_id.unwrap_or_else(Uuid::now_v7);
 
     let new = NewRefreshTokens {
         user_id,
         token_hash: &token_hash,
+        family_id,
         device_id: None,
         expires_at,
         revoked_at: None,

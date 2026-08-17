@@ -3,6 +3,7 @@ use chrono::{DateTime, Utc};
 use diesel::OptionalExtension;
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
+use uuid::Uuid;
 
 table! {
     users(user_id) {
@@ -42,6 +43,7 @@ table! {
         id -> BigSerial,
         user_id -> BigSerial,
         token_hash -> Text,
+        family_id -> Uuid,
         device_id -> Nullable<Text>,
         expires_at -> Timestamptz,
         revoked_at -> Nullable<Timestamptz>,
@@ -59,6 +61,7 @@ pub struct RefreshTokens {
     pub id: i64,
     pub user_id: i64,
     pub token_hash: String,
+    pub family_id: Uuid,
     pub device_id: Option<String>,
     pub expires_at: DateTime<Utc>,
     pub revoked_at: Option<DateTime<Utc>>,
@@ -74,6 +77,7 @@ pub struct RefreshTokens {
 pub struct NewRefreshTokens<'a> {
     pub user_id: i64,
     pub token_hash: &'a str,
+    pub family_id: Uuid,
     pub device_id: Option<&'a str>,
     pub expires_at: DateTime<Utc>,
     pub revoked_at: Option<DateTime<Utc>>,
@@ -202,6 +206,51 @@ impl RefreshTokens {
         .get_result::<Self>(conn)
         .await
         .optional()
+    }
+
+    #[tracing::instrument(
+        name = "db.refresh_token.select_by_hash",
+        skip(hash, conn),
+        fields(
+            db.system = "postgresql",
+            db.operation = "select",
+            db.table = "refresh_tokens",
+        )
+    )]
+    pub async fn select_by_token_hash(
+        hash: &str,
+        conn: &mut DieselConn,
+    ) -> Result<Option<Self>, diesel::result::Error> {
+        refresh_tokens::table
+            .filter(refresh_tokens::token_hash.eq(hash))
+            .select(Self::as_select())
+            .first::<Self>(conn)
+            .await
+            .optional()
+    }
+
+    #[tracing::instrument(
+        name = "db.refresh_token.family.revoke",
+        skip(conn),
+        fields(
+            db.system = "postgresql",
+            db.operation = "update",
+            db.table = "refresh_tokens",
+            auth.refresh_family_id = %family_id,
+        )
+    )]
+    pub async fn revoke_active_family(
+        family_id: Uuid,
+        conn: &mut DieselConn,
+    ) -> Result<usize, diesel::result::Error> {
+        diesel::update(
+            refresh_tokens::table
+                .filter(refresh_tokens::family_id.eq(family_id))
+                .filter(refresh_tokens::revoked_at.is_null()),
+        )
+        .set(refresh_tokens::revoked_at.eq(Utc::now()))
+        .execute(conn)
+        .await
     }
 
     #[tracing::instrument(

@@ -18,6 +18,7 @@ type IconSymbolName = keyof typeof MAPPING;
  */
 const MAPPING = {
   calendar: "event",
+  checkmark: "check",
   "chevron.left": "chevron-left",
   "house.fill": "home",
   "message.fill": "chat",
