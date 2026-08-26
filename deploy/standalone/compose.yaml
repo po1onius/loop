@@ -14,6 +14,9 @@ services:
       OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://otel-collector:4317
       DATABASE_URL: "postgresql://${PGUSER:?missing PGUSER}:${PGPASSWORD:?missing PGPASSWORD}@db:5432/${PGDATABASE:?missing PGDATABASE}"
       REDIS_URL: "redis://:${LOOP_REDIS_PASSWORD:?missing LOOP_REDIS_PASSWORD}@cache:6379"
+      MEILISEARCH_URL: http://search:7700
+      MEILISEARCH_API_KEY: ${LOOP_MEILISEARCH_MASTER_KEY:?missing LOOP_MEILISEARCH_MASTER_KEY}
+      LOOP_EVENT_SEARCH_INDEX_UID: ${LOOP_EVENT_SEARCH_INDEX_UID:-events_v1}
       LOOP_EMAIL_FROM: ${LOOP_EMAIL_FROM:?missing LOOP_EMAIL_FROM}
       LOOP_SMTP_SENDER: ${LOOP_SMTP_SENDER:?missing LOOP_SMTP_SENDER}
       LOOP_SMTP_DOMAIN: ${LOOP_SMTP_DOMAIN:?missing LOOP_SMTP_DOMAIN}
@@ -35,11 +38,43 @@ services:
     ports:
       - "${LOOP_API_SVC_PORT:-3000}:3000"
     depends_on:
-      - db
-      - cache
-      - minio
-      - minio-init
-      - otel-collector
+      db:
+        condition: service_started
+      cache:
+        condition: service_started
+      search:
+        condition: service_healthy
+      minio:
+        condition: service_started
+      minio-init:
+        condition: service_completed_successfully
+      otel-collector:
+        condition: service_started
+
+  worker-svc:
+    container_name: loop-worker-svc
+    build:
+      context: ../..
+      dockerfile: srv/loop-worker-svc/Dockerfile
+    image: loop-worker-svc:standalone
+    environment:
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://otel-collector:4317
+      DATABASE_URL: "postgresql://${PGUSER:?missing PGUSER}:${PGPASSWORD:?missing PGPASSWORD}@db:5432/${PGDATABASE:?missing PGDATABASE}"
+      RABBITMQ_URL: ${LOOP_RABBITMQ_URL:?missing LOOP_RABBITMQ_URL}
+      MEILISEARCH_URL: http://search:7700
+      MEILISEARCH_API_KEY: ${LOOP_MEILISEARCH_MASTER_KEY:?missing LOOP_MEILISEARCH_MASTER_KEY}
+      LOOP_EVENT_SEARCH_INDEX_UID: ${LOOP_EVENT_SEARCH_INDEX_UID:-events_v1}
+    volumes:
+      - "${LOOP_HOST_LOG_DIR:-../../srv/log}:/app/log"
+    depends_on:
+      db:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+      search:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
 
   realtime-svc:
     container_name: loop-realtime-svc
@@ -117,6 +152,42 @@ services:
       - loop-redis-data:/data
     ports:
       - "${LOOP_REDIS_PORT:-6319}:6379"
+
+  search:
+    container_name: loop-meilisearch
+    image: docker.io/getmeili/meilisearch:v1.53.1
+    environment:
+      # 单机环境复用 master key 供 API 管理索引；生产环境应通过 Secret 注入，
+      # 并只让后端服务访问 Meilisearch，不向移动端暴露任何搜索密钥。
+      MEILI_ENV: production
+      MEILI_MASTER_KEY: ${LOOP_MEILISEARCH_MASTER_KEY:?missing LOOP_MEILISEARCH_MASTER_KEY}
+      MEILI_NO_ANALYTICS: "true"
+    volumes:
+      - loop-meilisearch-data:/meili_data
+    ports:
+      - "${LOOP_MEILISEARCH_PORT:-7700}:7700"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:7700/health"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  rabbitmq:
+    container_name: loop-rabbitmq
+    image: docker.io/rabbitmq:4.3.5-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: ${LOOP_RABBITMQ_USER:?missing LOOP_RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${LOOP_RABBITMQ_PASSWORD:?missing LOOP_RABBITMQ_PASSWORD}
+    volumes:
+      - loop-rabbitmq-data:/var/lib/rabbitmq
+    ports:
+      - "${LOOP_RABBITMQ_PORT:-5672}:5672"
+      - "${LOOP_RABBITMQ_MANAGEMENT_PORT:-15672}:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 3s
+      timeout: 5s
+      retries: 40
 
   minio:
     container_name: loop-minio
@@ -230,6 +301,8 @@ services:
 volumes:
   loop-pgdata:
   loop-redis-data:
+  loop-meilisearch-data:
+  loop-rabbitmq-data:
   loop-minio-data:
   loop-tempo-data:
   loop-loki-data:

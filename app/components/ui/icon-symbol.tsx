@@ -34,6 +34,7 @@ const MAPPING = {
   trash: "delete-outline",
   "chevron.left.forwardslash.chevron.right": "code",
   "chevron.right": "chevron-right",
+  magnifyingglass: "search",
 } as IconMapping;
 
 /**

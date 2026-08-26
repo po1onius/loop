@@ -7,6 +7,7 @@ DROP TABLE community_posts;
 DROP TABLE conversations;
 DROP TABLE community_sections;
 DROP TABLE event_participations;
+DROP TABLE async_outbox;
 DROP TRIGGER trg_events_updated_at ON events;
 DROP FUNCTION set_events_updated_at();
 DROP TABLE events;

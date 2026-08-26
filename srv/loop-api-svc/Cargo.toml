@@ -28,7 +28,8 @@ dashmap = { workspace = true }
 tokio-stream = { workspace = true }
 tower-cookies = { workspace = true }
 loop-svc-model = { workspace = true }
-loop-infra = { workspace = true, features = ["db", "http-error", "mail", "observability", "redis", "storage"] }
+loop-search = { workspace = true }
+loop-infra = { workspace = true, features = ["db", "http-error", "mail", "observability", "redis", "search", "storage"] }
 time = { workspace = true }
 loop-dto = { workspace = true }
 base64 = { workspace = true }

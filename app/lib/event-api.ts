@@ -7,9 +7,20 @@ import type {
   ListEventJoinRequestsResp,
   ListEventsResp,
   ReviewEventJoinRequest,
+  SearchEventsResp,
   UpdateEventDraftRequest,
 } from "@/lib/dto";
 import { requestJson } from "@/lib/api-client";
+
+export type SearchEventsParams = {
+  limit?: number | undefined;
+  location?: string | undefined;
+  offset?: number | undefined;
+  query?: string | undefined;
+  startFrom?: string | undefined;
+  startTo?: string | undefined;
+  tags?: string[] | undefined;
+};
 
 export function listEvents(limit = 20, offset = 0): Promise<ListEventsResp> {
   const params = new URLSearchParams({
@@ -17,6 +28,37 @@ export function listEvents(limit = 20, offset = 0): Promise<ListEventsResp> {
     offset: String(offset),
   });
   return requestJson<undefined, ListEventsResp>(`/event?${params.toString()}`);
+}
+
+export function searchEvents(
+  params: SearchEventsParams,
+): Promise<SearchEventsResp> {
+  const query = new URLSearchParams({
+    limit: String(params.limit ?? 20),
+    offset: String(params.offset ?? 0),
+  });
+  const normalizedQuery = params.query?.trim();
+  const normalizedLocation = params.location?.trim();
+  const normalizedTags = params.tags
+    ?.map((tag) => tag.trim())
+    .filter(Boolean);
+  if (normalizedQuery) query.set("q", normalizedQuery);
+  if (normalizedLocation) query.set("location", normalizedLocation);
+  if (normalizedTags?.length) query.set("tags", normalizedTags.join(","));
+  if (params.startFrom) query.set("start_from", params.startFrom);
+  if (params.startTo) query.set("start_to", params.startTo);
+  console.info("[event-api] searching events", {
+    queryLength: normalizedQuery?.length ?? 0,
+    tagCount: normalizedTags?.length ?? 0,
+    hasLocation: Boolean(normalizedLocation),
+    hasStartFrom: Boolean(params.startFrom),
+    hasStartTo: Boolean(params.startTo),
+    limit: params.limit ?? 20,
+    offset: params.offset ?? 0,
+  });
+  return requestJson<undefined, SearchEventsResp>(
+    `/event/search?${query.toString()}`,
+  );
 }
 
 export function getEvent(eventId: string): Promise<EventResp> {
@@ -235,5 +277,6 @@ export type {
   ListEventJoinRequestsResp,
   ListEventsResp,
   ReviewEventJoinRequest,
+  SearchEventsResp,
   UpdateEventDraftRequest,
 };

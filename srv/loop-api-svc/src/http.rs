@@ -12,6 +12,7 @@ use jsonwebtoken::DecodingKey;
 use jsonwebtoken::EncodingKey;
 use loop_infra::http_error::ApiErrorCode;
 pub use loop_infra::http_error::{ApiError as HttpErr, OptionExt, ResultExt};
+use loop_search::EventSearchService;
 use serde::Deserialize;
 use serde::Serialize;
 use std::sync::Arc;
@@ -29,6 +30,7 @@ struct Claims {
 pub struct AppState {
     pub jwt_enc: Arc<EncodingKey>,
     pub jwt_dec: Arc<DecodingKey>,
+    pub event_search: Arc<EventSearchService>,
 }
 
 #[derive(Clone)]
@@ -204,6 +206,7 @@ pub enum ErrorCode {
     StalePermission,
     StorageError,
     StorageUnconfigured,
+    SearchError,
     TooManyRequests,
     Unauthorized,
     UserNotExist,
@@ -243,6 +246,7 @@ impl ErrorCode {
             Self::StalePermission => "stale_permission",
             Self::StorageError => "storage_error",
             Self::StorageUnconfigured => "storage_unconfigured",
+            Self::SearchError => "search_error",
             Self::TooManyRequests => "too_many_requests",
             Self::Unauthorized => "unauthorized",
             Self::UserNotExist => "user_not_exist",
@@ -290,6 +294,7 @@ pub mod err_key {
     pub const STALE_PERMISSION: ErrorCode = ErrorCode::StalePermission;
     pub const STORAGE_ERROR: ErrorCode = ErrorCode::StorageError;
     pub const STORAGE_UNCONFIGURED: ErrorCode = ErrorCode::StorageUnconfigured;
+    pub const SEARCH_ERROR: ErrorCode = ErrorCode::SearchError;
     pub const TOO_MANY_REQUESTS: ErrorCode = ErrorCode::TooManyRequests;
     pub const UNAUTHORIZED: ErrorCode = ErrorCode::Unauthorized;
     pub const USER_NOT_EXIST: ErrorCode = ErrorCode::UserNotExist;

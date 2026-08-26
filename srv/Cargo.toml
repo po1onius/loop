@@ -1,8 +1,11 @@
 [workspace]
 members = [
     "loop-infra",
+    "loop-messaging",
     "loop-api-svc",
     "loop-realtime-svc",
+    "loop-search",
+    "loop-worker-svc",
     "loop-svc-model"
 ]
 resolver = "3"
@@ -47,6 +50,8 @@ dashmap = "*"
 tokio-stream = "*"
 tower-cookies = "*"
 loop-svc-model = { path = "loop-svc-model" }
+loop-search = { path = "loop-search" }
+loop-messaging = { path = "loop-messaging" }
 loop-infra = { path = "loop-infra", default-features = false }
 time = "*"
 loop-dto = { path = "../loop-dto" }
@@ -55,6 +60,8 @@ chrono = { version = "*", features = ["serde"] }
 ipnet = "*"
 paste = "*"
 tera = "*"
+meilisearch-sdk = "0.33.0"
+lapin = "4.10.0"
 
 
 [profile.release]

@@ -261,6 +261,23 @@ pub struct ListEventsResp {
 
 #[derive(Debug, Serialize, Deserialize, TS)]
 #[ts(export_to = "dto.ts")]
+pub struct EventSearchFacetResp {
+    pub value: String,
+    pub count: i32,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export_to = "dto.ts")]
+pub struct SearchEventsResp {
+    pub items: Vec<EventResp>,
+    pub next_offset: Option<i32>,
+    pub estimated_total: i32,
+    pub tags: Vec<EventSearchFacetResp>,
+    pub locations: Vec<EventSearchFacetResp>,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export_to = "dto.ts")]
 pub struct CreateMediaUploadRequest {
     pub mime_type: String,
     pub byte_size: i32,

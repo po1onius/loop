@@ -30,6 +30,10 @@ backend-up:
 	: "$${PGUSER:?missing PGUSER in $(LOCAL_ENV)}"; \
 	: "$${PGPASSWORD:?missing PGPASSWORD in $(LOCAL_ENV)}"; \
 	: "$${LOOP_REDIS_PASSWORD:?missing LOOP_REDIS_PASSWORD in $(LOCAL_ENV)}"; \
+	: "$${LOOP_MEILISEARCH_MASTER_KEY:?missing LOOP_MEILISEARCH_MASTER_KEY in $(LOCAL_ENV)}"; \
+	: "$${LOOP_RABBITMQ_URL:?missing LOOP_RABBITMQ_URL in $(LOCAL_ENV)}"; \
+	: "$${LOOP_RABBITMQ_USER:?missing LOOP_RABBITMQ_USER in $(LOCAL_ENV)}"; \
+	: "$${LOOP_RABBITMQ_PASSWORD:?missing LOOP_RABBITMQ_PASSWORD in $(LOCAL_ENV)}"; \
 	: "$${LOOP_HOST_CONFIG_FILE:?missing LOOP_HOST_CONFIG_FILE in $(LOCAL_ENV)}"; \
 	: "$${LOOP_HOST_SECRETS_DIR:?missing LOOP_HOST_SECRETS_DIR in $(LOCAL_ENV)}"; \
 	repo_root="$$(pwd -P)"; \
@@ -44,7 +48,11 @@ backend-up:
 	[[ -f "$${host_secrets_dir}/jwt_private.pem" ]] || { echo "missing JWT private key: $${host_secrets_dir}/jwt_private.pem"; exit 1; }; \
 	[[ -f "$${host_secrets_dir}/jwt_public.pem" ]] || { echo "missing JWT public key: $${host_secrets_dir}/jwt_public.pem"; exit 1; }; \
 	mkdir -p "$${host_log_dir}"; \
-	( cd "$(STANDALONE_DIR)" && $(COMPOSE) -f compose.yaml up -d db cache minio minio-init otel-collector tempo loki alloy prometheus grafana ); \
+	( cd "$(STANDALONE_DIR)" && $(COMPOSE) -f compose.yaml up -d db cache search rabbitmq minio minio-init otel-collector tempo loki alloy prometheus grafana ); \
+	until ( cd "$(STANDALONE_DIR)" && $(COMPOSE) -f compose.yaml exec -T rabbitmq rabbitmq-diagnostics -q ping >/dev/null 2>&1 ); do \
+		echo "waiting for RabbitMQ..."; \
+		sleep 1; \
+	done; \
 	if ! podman image exists "$(MIGRATE_IMAGE)" >/dev/null 2>&1; then \
 		echo "missing $(MIGRATE_IMAGE), building migrate image..."; \
 		( cd "$(STANDALONE_DIR)" && $(COMPOSE) -f compose.yaml build migrate ); \
@@ -52,6 +60,10 @@ backend-up:
 	( cd "$(STANDALONE_DIR)" && $(COMPOSE) -f compose.yaml run --rm migrate ); \
 	export DATABASE_URL="postgresql://$${PGUSER}:$${PGPASSWORD}@localhost:$${LOOP_PG_PORT:-5132}/$${PGDATABASE}"; \
 	export REDIS_URL="redis://:$${LOOP_REDIS_PASSWORD}@localhost:$${LOOP_REDIS_PORT:-6319}"; \
+	export MEILISEARCH_URL="http://127.0.0.1:$${LOOP_MEILISEARCH_PORT:-7700}"; \
+	export MEILISEARCH_API_KEY="$${LOOP_MEILISEARCH_MASTER_KEY}"; \
+	export LOOP_EVENT_SEARCH_INDEX_UID="$${LOOP_EVENT_SEARCH_INDEX_UID:-events_v1}"; \
+	export RABBITMQ_URL="$${LOOP_RABBITMQ_URL/rabbitmq:5672/127.0.0.1:$${LOOP_RABBITMQ_PORT:-5672}}"; \
 	export LOOP_CONFIG_FILE="$${host_config_file}"; \
 	export LOOP_JWT_RSA_PRI_KEY_FILE="$${host_secrets_dir}/jwt_private.pem"; \
 	export LOOP_JWT_RSA_PUB_KEY_FILE="$${host_secrets_dir}/jwt_public.pem"; \
@@ -63,5 +75,13 @@ backend-up:
 	cd "$(SRV_DIR)"; \
 	LOOP_HTTP_ADDR="0.0.0.0:$${LOOP_REALTIME_SVC_PORT:-3010}" $(CARGO) run -p loop-realtime-svc & \
 	realtime_pid="$$!"; \
-	trap 'kill "$${realtime_pid}" >/dev/null 2>&1 || true; wait "$${realtime_pid}" >/dev/null 2>&1 || true' EXIT INT TERM; \
-	$(CARGO) run -p loop-api-svc
+	$(CARGO) run -p loop-worker-svc & \
+	worker_pid="$$!"; \
+	$(CARGO) run -p loop-api-svc & \
+	api_pid="$$!"; \
+	trap 'kill "$${realtime_pid}" "$${worker_pid}" "$${api_pid}" >/dev/null 2>&1 || true; wait "$${realtime_pid}" "$${worker_pid}" "$${api_pid}" >/dev/null 2>&1 || true' EXIT INT TERM; \
+	set +e; \
+	wait -n "$${realtime_pid}" "$${worker_pid}" "$${api_pid}"; \
+	status="$$?"; \
+	set -e; \
+	exit "$${status}"

@@ -7,8 +7,12 @@ pub mod http_error;
 pub mod mail;
 #[cfg(feature = "observability")]
 pub mod observability;
+#[cfg(feature = "rabbitmq")]
+pub mod rabbitmq;
 #[cfg(feature = "redis")]
 pub mod redis;
+#[cfg(feature = "search")]
+pub mod search;
 #[cfg(feature = "sms")]
 pub mod sms;
 #[cfg(feature = "storage")]

@@ -2,19 +2,27 @@
     feature = "db",
     feature = "redis",
     feature = "mail",
-    feature = "storage"
+    feature = "storage",
+    feature = "search",
+    feature = "rabbitmq"
 ))]
 use anyhow::Context;
 #[cfg(any(
     feature = "db",
     feature = "redis",
     feature = "mail",
-    feature = "storage"
+    feature = "storage",
+    feature = "search",
+    feature = "rabbitmq"
 ))]
 use std::fs;
 
 #[cfg(feature = "mail")]
 use crate::mail::EmailConfig;
+#[cfg(feature = "rabbitmq")]
+use crate::rabbitmq::RabbitMqConfig;
+#[cfg(feature = "search")]
+use crate::search::MeilisearchConfig;
 #[cfg(feature = "sms")]
 use crate::sms::SmsConfig;
 #[cfg(feature = "storage")]
@@ -37,6 +45,10 @@ pub struct InfraConfig {
     pub sms: SmsConfig,
     #[cfg(feature = "storage")]
     pub storage: S3StorageConfig,
+    #[cfg(feature = "search")]
+    pub search: MeilisearchConfig,
+    #[cfg(feature = "rabbitmq")]
+    pub rabbitmq: RabbitMqConfig,
 }
 
 impl InfraConfig {
@@ -62,6 +74,14 @@ impl InfraConfig {
         self.storage
             .validate()
             .context("invalid storage configuration")?;
+        #[cfg(feature = "search")]
+        self.search
+            .validate()
+            .context("invalid search configuration")?;
+        #[cfg(feature = "rabbitmq")]
+        self.rabbitmq
+            .validate()
+            .context("invalid RabbitMQ configuration")?;
         Ok(())
     }
 
@@ -82,6 +102,10 @@ impl InfraConfig {
 
         #[cfg(feature = "storage")]
         crate::storage::init_s3_storage(self.storage)?;
+        #[cfg(feature = "search")]
+        crate::search::init_meilisearch_client(self.search)?;
+        #[cfg(feature = "rabbitmq")]
+        crate::rabbitmq::init_rabbitmq_config(self.rabbitmq)?;
         Ok(())
     }
 }
@@ -107,7 +131,36 @@ fn apply_env_overrides(cfg: &mut InfraConfig) -> anyhow::Result<()> {
     apply_email_env_overrides(cfg)?;
     #[cfg(feature = "storage")]
     apply_storage_env_overrides(cfg)?;
+    #[cfg(feature = "search")]
+    apply_search_env_overrides(cfg)?;
+    #[cfg(feature = "rabbitmq")]
+    apply_rabbitmq_env_overrides(cfg)?;
 
+    Ok(())
+}
+
+#[cfg(feature = "rabbitmq")]
+fn apply_rabbitmq_env_overrides(cfg: &mut InfraConfig) -> anyhow::Result<()> {
+    cfg.rabbitmq.url = env_or_file("RABBITMQ_URL", "RABBITMQ_URL_FILE")?
+        .ok_or_else(|| anyhow::anyhow!("RABBITMQ_URL or RABBITMQ_URL_FILE is required"))?;
+    tracing::info!(
+        event = "infra.config.rabbitmq.loaded",
+        "RabbitMQ configuration loaded from deployment configuration"
+    );
+    Ok(())
+}
+
+#[cfg(feature = "search")]
+fn apply_search_env_overrides(cfg: &mut InfraConfig) -> anyhow::Result<()> {
+    cfg.search.url = env_required("MEILISEARCH_URL")?;
+    cfg.search.api_key = env_or_file("MEILISEARCH_API_KEY", "MEILISEARCH_API_KEY_FILE")?
+        .ok_or_else(|| {
+            anyhow::anyhow!("MEILISEARCH_API_KEY or MEILISEARCH_API_KEY_FILE is required")
+        })?;
+    tracing::info!(
+        event = "infra.config.meilisearch.loaded",
+        "Meilisearch configuration loaded from deployment configuration"
+    );
     Ok(())
 }
 
@@ -125,7 +178,7 @@ fn build_pg_conn_from_env() -> anyhow::Result<String> {
     Ok(value)
 }
 
-#[cfg(any(feature = "db", feature = "redis"))]
+#[cfg(any(feature = "db", feature = "redis", feature = "search"))]
 fn env_required(key: &str) -> anyhow::Result<String> {
     env_opt(key).ok_or_else(|| anyhow::anyhow!("{key} is required"))
 }
@@ -189,7 +242,9 @@ fn apply_storage_env_overrides(cfg: &mut InfraConfig) -> anyhow::Result<()> {
     feature = "db",
     feature = "redis",
     feature = "mail",
-    feature = "storage"
+    feature = "storage",
+    feature = "search",
+    feature = "rabbitmq"
 ))]
 fn env_or_file(value_key: &str, file_key: &str) -> anyhow::Result<Option<String>> {
     let value = env_opt(value_key);
@@ -206,7 +261,9 @@ fn env_or_file(value_key: &str, file_key: &str) -> anyhow::Result<Option<String>
     feature = "db",
     feature = "redis",
     feature = "mail",
-    feature = "storage"
+    feature = "storage",
+    feature = "search",
+    feature = "rabbitmq"
 ))]
 fn read_non_empty_file(path: &str) -> anyhow::Result<String> {
     let value =
@@ -226,7 +283,7 @@ fn parse_env_bool(key: &str, value: &str) -> anyhow::Result<bool> {
     }
 }
 
-#[cfg(any(feature = "db", feature = "redis"))]
+#[cfg(any(feature = "db", feature = "redis", feature = "search"))]
 fn ensure_non_empty(name: &str, value: &str) -> anyhow::Result<()> {
     if value.trim().is_empty() {
         anyhow::bail!("{name} is required");
@@ -238,7 +295,9 @@ fn ensure_non_empty(name: &str, value: &str) -> anyhow::Result<()> {
     feature = "db",
     feature = "redis",
     feature = "mail",
-    feature = "storage"
+    feature = "storage",
+    feature = "search",
+    feature = "rabbitmq"
 ))]
 fn env_opt(key: &str) -> Option<String> {
     std::env::var(key)

@@ -158,6 +158,29 @@ BEFORE UPDATE ON events
 FOR EACH ROW
 EXECUTE FUNCTION set_events_updated_at();
 
+-- 通用事务 outbox 与业务数据使用同一个 PostgreSQL 事务提交，确保活动发布成功时
+-- 一定存在待投递事件。RabbitMQ publisher confirm 成功后才填写 published_at；
+-- relay 崩溃导致的重复投递由下游幂等消费者处理。按项目约定不建立外键。
+CREATE TABLE async_outbox (
+    outbox_id UUID PRIMARY KEY,
+    topic TEXT NOT NULL,
+    aggregate_id TEXT NOT NULL,
+    payload JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    published_at TIMESTAMPTZ,
+    CONSTRAINT async_outbox_topic_not_empty CHECK (length(btrim(topic)) > 0),
+    CONSTRAINT async_outbox_aggregate_id_not_empty CHECK (length(btrim(aggregate_id)) > 0),
+    CONSTRAINT async_outbox_payload_object CHECK (jsonb_typeof(payload) = 'object')
+);
+
+CREATE INDEX idx_async_outbox_pending
+ON async_outbox(created_at ASC, outbox_id ASC)
+WHERE published_at IS NULL;
+
+CREATE INDEX idx_async_outbox_published_at
+ON async_outbox(published_at)
+WHERE published_at IS NOT NULL;
+
 -- 用户与活动的参与关系独立建表，并通过唯一约束保证同一用户在同一活动中只有一条记录。
 -- 按项目约定不建立数据库外键；活动和用户是否存在、发布者是否有权审核均由业务层校验。
 CREATE TABLE event_participations (

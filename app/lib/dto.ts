@@ -42,6 +42,10 @@ export type EventTextMark = { "type": "bold" } | { "type": "italic" } | { "type"
 
 export type ListEventsResp = { items: Array<EventResp>, next_offset: number | null, };
 
+export type EventSearchFacetResp = { value: string, count: number, };
+
+export type SearchEventsResp = { items: Array<EventResp>, next_offset: number | null, estimated_total: number, tags: Array<EventSearchFacetResp>, locations: Array<EventSearchFacetResp>, };
+
 export type ListEventJoinRequestsResp = { items: Array<EventJoinRequestResp>, };
 
 export type LoginRequest = { account: string, password: string, };

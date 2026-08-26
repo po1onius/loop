@@ -15,6 +15,7 @@ use jsonwebtoken::{DecodingKey, EncodingKey};
 use loop_infra::config::InfraConfig;
 use loop_infra::observability::{ObservabilityConfig, init as init_observability};
 use loop_infra::observability::{extract_trace_context, metrics_handler, record_http_metrics};
+use loop_search::EventSearchService;
 use tower_http::{
     cors::{Any, CorsLayer},
     request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer},
@@ -118,6 +119,14 @@ async fn run() -> anyhow::Result<()> {
 
     let cfg = config();
 
+    let event_search = Arc::new(EventSearchService::from_env()?);
+    // API 仅确保查询所需索引和 settings 已就绪；存量同步与增量写入由 worker
+    // 负责，避免活动发布请求等待 Meilisearch 索引任务。
+    event_search
+        .initialize_reader()
+        .await
+        .context("failed to initialize event search")?;
+
     let state = AppState {
         jwt_dec: Arc::new(
             DecodingKey::from_rsa_pem(cfg.crypto.jwt_rsa_pub_key.as_bytes())
@@ -127,6 +136,7 @@ async fn run() -> anyhow::Result<()> {
             EncodingKey::from_rsa_pem(cfg.crypto.jwt_rsa_pri_key.as_bytes())
                 .context("failed to parse jwt private key")?,
         ),
+        event_search,
     };
 
     let app = build_app(state);

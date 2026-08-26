@@ -7,13 +7,14 @@ use loop_dto::{
     CreateEventRequest, CreateMediaUploadRequest, CreateMediaUploadResp, CurrentUserResp,
     EventContentBlock, EventContentDoc, EventContentImage, EventFeatureBlock, EventInlineNode,
     EventJoinRequestResp, EventJoinReviewDecision, EventParticipationResp,
-    EventParticipationStateResp, EventParticipationStatus, EventResp, EventStatus, EventTextColor,
-    EventTextMark, ListCommunityPostsResp, ListConversationMessagesResp, ListConversationsResp,
-    ListEventJoinRequestsResp, ListEventsResp, LoginRequest, LoginResp,
-    MarkConversationReadRequest, MediaAssetResp, MediaDownloadUrlResp, PresignedHeader,
-    RefreshTokenRequest, RegisterRequest, ReviewEventJoinRequest, SendConversationMessageRequest,
-    SetConversationSubscriptionRequest, SetTokenRequest, UpdateCommunityPostRequest,
-    UpdateEventDraftRequest, UpdateUserAvatarRequest, VerifyCodeRequest, VerifyCodeResp,
+    EventParticipationStateResp, EventParticipationStatus, EventResp, EventSearchFacetResp,
+    EventStatus, EventTextColor, EventTextMark, ListCommunityPostsResp,
+    ListConversationMessagesResp, ListConversationsResp, ListEventJoinRequestsResp, ListEventsResp,
+    LoginRequest, LoginResp, MarkConversationReadRequest, MediaAssetResp, MediaDownloadUrlResp,
+    PresignedHeader, RefreshTokenRequest, RegisterRequest, ReviewEventJoinRequest,
+    SearchEventsResp, SendConversationMessageRequest, SetConversationSubscriptionRequest,
+    SetTokenRequest, UpdateCommunityPostRequest, UpdateEventDraftRequest, UpdateUserAvatarRequest,
+    VerifyCodeRequest, VerifyCodeResp,
 };
 use ts_rs::{Config, TS};
 
@@ -48,6 +49,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     append::<EventTextColor>(&cfg, &mut declarations)?;
     append::<EventTextMark>(&cfg, &mut declarations)?;
     append::<ListEventsResp>(&cfg, &mut declarations)?;
+    append::<EventSearchFacetResp>(&cfg, &mut declarations)?;
+    append::<SearchEventsResp>(&cfg, &mut declarations)?;
     append::<ListEventJoinRequestsResp>(&cfg, &mut declarations)?;
     append::<LoginRequest>(&cfg, &mut declarations)?;
     append::<LoginResp>(&cfg, &mut declarations)?;

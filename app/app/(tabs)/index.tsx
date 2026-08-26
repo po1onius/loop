@@ -219,6 +219,17 @@ export default function HomeScreen() {
             <ThemedText type="subtitle" style={styles.homeHeaderTitle}>
               活动推荐
             </ThemedText>
+            <Pressable
+              accessibilityLabel="搜索活动"
+              accessibilityRole="button"
+              onPress={() => router.push("/search-events" as never)}
+              style={({ pressed }) => [
+                styles.searchButton,
+                pressed ? styles.listPressablePressed : undefined,
+              ]}
+            >
+              <IconSymbol size={22} name="magnifyingglass" color="#0A7EA4" />
+            </Pressable>
           </View>
           <FlatList
             ref={carouselRef}
@@ -379,6 +390,14 @@ const styles = StyleSheet.create({
   },
   homeHeaderTitle: {
     flex: 1,
+  },
+  searchButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#E8F3F7",
   },
   carousel: {
     flex: 1,

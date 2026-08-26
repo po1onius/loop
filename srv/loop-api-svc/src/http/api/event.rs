@@ -15,14 +15,16 @@ use loop_dto::{
     EventContentDoc, EventContentImage, EventFeatureBlock, EventInlineNode, EventJoinRequestResp,
     EventJoinReviewDecision, EventParticipationResp, EventParticipationStateResp,
     EventParticipationStatus, EventResp, EventStatus, EventTextMark, ListEventJoinRequestsResp,
-    ListEventsResp, ReviewEventJoinRequest, UpdateEventDraftRequest,
+    ListEventsResp, ReviewEventJoinRequest, SearchEventsResp, UpdateEventDraftRequest,
 };
+use loop_search::EventSearchParams;
 use loop_svc_model::{
     DieselConn,
     event::{
         Event, EventDraftChanges, EventParticipation, MediaAsset, NewEvent, NewEventParticipation,
         PublishEventDraftChanges,
     },
+    outbox::AsyncOutbox,
 };
 use serde::Deserialize;
 use std::collections::HashSet;
@@ -31,6 +33,7 @@ const EVENT_CREATE_PERMISSION: &str = "event.create";
 const EVENT_JOIN_PERMISSION: &str = "event.join";
 const DEFAULT_LIST_LIMIT: i32 = 20;
 const MAX_LIST_LIMIT: i32 = 50;
+const MAX_SEARCH_OFFSET: i32 = 10_000;
 const MAX_TITLE_CHARS: usize = 80;
 const MAX_BLOCKS: usize = 100;
 const MAX_INLINE_NODES_PER_PARAGRAPH: usize = 100;
@@ -53,6 +56,18 @@ pub struct ListEventsQuery {
 #[derive(Debug, Deserialize)]
 pub struct ListOwnedEventsQuery {
     status: Option<String>,
+    limit: Option<i32>,
+    offset: Option<i32>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SearchEventsQuery {
+    q: Option<String>,
+    /// 多个标签使用英文逗号分隔；所有标签都必须匹配。
+    tags: Option<String>,
+    location: Option<String>,
+    start_from: Option<String>,
+    start_to: Option<String>,
     limit: Option<i32>,
     offset: Option<i32>,
 }
@@ -105,13 +120,25 @@ pub async fn create_event(
 ) -> Result<(StatusCode, Json<EventResp>), HttpErr> {
     let draft = normalize_publish_payload(req)?;
     validate_referenced_media_assets(auth.user_id, &draft.asset_ids).await?;
-    let event = insert_event(auth.user_id, "published", draft, Some(Utc::now())).await?;
+    let mut conn = db_conn!();
+    let event = conn
+        .transaction::<Event, HttpErr, _>(async |conn| {
+            let event =
+                insert_event_with_conn(auth.user_id, "published", draft, Some(Utc::now()), conn)
+                    .await?;
+            AsyncOutbox::insert_event_search_refresh(event.event_id, crate::SERVICE_NAME, conn)
+                .await
+                .internal(DB_ERROR)?;
+            Ok(event)
+        })
+        .await?;
     tracing::Span::current().record("event.id", event.event_id);
     tracing::info!(
         event = "event.created",
         event_id = event.event_id,
         user_id = auth.user_id,
-        "event created and published"
+        search_index_scheduled = true,
+        "event created, published, and transactionally scheduled for search indexing"
     );
 
     Ok((StatusCode::CREATED, Json(to_event_resp(event)?)))
@@ -195,7 +222,8 @@ pub async fn publish_event_draft(
         event = "event.draft_published",
         event_id = event.event_id,
         user_id = auth.user_id,
-        "event draft published"
+        search_index_scheduled = true,
+        "event draft published and transactionally scheduled for search indexing"
     );
 
     Ok(Json(to_event_resp(event)?))
@@ -250,6 +278,46 @@ pub async fn list_events(
         items,
         next_offset: has_next.then_some(offset + limit),
     }))
+}
+
+#[tracing::instrument(name = "event.search", skip_all)]
+pub async fn search_events(
+    State(state): State<crate::http::AppState>,
+    Query(query): Query<SearchEventsQuery>,
+) -> Result<Json<SearchEventsResp>, HttpErr> {
+    let query_text = query.q.unwrap_or_default().trim().to_string();
+    if query_text.chars().count() > 100 {
+        return Err(HttpErr::client(StatusCode::BAD_REQUEST, INVALID_INPUT));
+    }
+    let tags = parse_search_tags(query.tags.as_deref())?;
+    let location = normalize_optional_text(query.location, 80)?;
+    let start_from = parse_optional_time(query.start_from.as_deref())?;
+    let start_to = parse_optional_time(query.start_to.as_deref())?;
+    if start_from.zip(start_to).is_some_and(|(from, to)| to < from) {
+        return Err(HttpErr::client(StatusCode::BAD_REQUEST, INVALID_INPUT));
+    }
+    let limit = query
+        .limit
+        .unwrap_or(DEFAULT_LIST_LIMIT)
+        .clamp(1, MAX_LIST_LIMIT);
+    let offset = query.offset.unwrap_or(0);
+    if !(0..=MAX_SEARCH_OFFSET).contains(&offset) {
+        return Err(HttpErr::client(StatusCode::BAD_REQUEST, INVALID_INPUT));
+    }
+    let response = state
+        .event_search
+        .search(EventSearchParams {
+            query: query_text,
+            tags,
+            location,
+            start_from,
+            start_to,
+            limit: limit as usize,
+            offset: offset as usize,
+        })
+        .await
+        .internal(SEARCH_ERROR)?;
+    Ok(Json(response))
 }
 
 #[tracing::instrument(name = "event.owned.list", skip_all, fields(user.id = auth.user_id))]
@@ -751,9 +819,13 @@ async fn publish_locked_event_draft(
     let asset_ids = collect_image_asset_ids(&parse_stored_content(&event)?);
     validate_referenced_media_assets_with_conn(user_id, &asset_ids, conn).await?;
     let publish_changes = build_publish_changes(event)?;
-    Event::publish_draft_with_changes(event_id, user_id, publish_changes, conn)
+    let event = Event::publish_draft_with_changes(event_id, user_id, publish_changes, conn)
         .await
-        .map_err(map_event_mutation_error)
+        .map_err(map_event_mutation_error)?;
+    AsyncOutbox::insert_event_search_refresh(event.event_id, crate::SERVICE_NAME, conn)
+        .await
+        .internal(DB_ERROR)?;
+    Ok(event)
 }
 
 fn normalize_publish_payload(req: CreateEventRequest) -> Result<NormalizedEventDraft, HttpErr> {
@@ -939,6 +1011,15 @@ fn normalize_tags(tags: Vec<String>) -> Result<Vec<String>, HttpErr> {
         }
     }
     Ok(normalized)
+}
+
+fn parse_search_tags(value: Option<&str>) -> Result<Vec<String>, HttpErr> {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(Vec::new());
+    };
+    // 搜索条件与发布时使用同一套标签规范化，避免 `#摄影` 与 `摄影` 在索引
+    // 过滤表达式里成为两个看似不同的条件。
+    normalize_tags(value.split(',').map(str::to_string).collect())
 }
 
 fn validate_capacity(capacity: Option<i32>) -> Result<Option<i32>, HttpErr> {
@@ -1347,6 +1428,7 @@ fn map_event_mutation_error(err: diesel::result::Error) -> HttpErr {
 pub fn route(state: crate::http::AppState) -> AppRoutes {
     AppRoutes::<crate::http::AppState>::new()
         .public(Method::GET, "/event", get(list_events))
+        .public(Method::GET, "/event/search", get(search_events))
         .public(Method::GET, "/event/{event_id}", get(get_event))
         .protected(
             Method::GET,

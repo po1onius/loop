@@ -1,0 +1,19 @@
+[package]
+name = "loop-worker-svc"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+chrono = { workspace = true }
+diesel-async = { workspace = true }
+futures-util = { workspace = true }
+lapin = { workspace = true }
+loop-infra = { workspace = true, features = ["db", "observability", "rabbitmq", "search"] }
+loop-messaging = { workspace = true }
+loop-search = { workspace = true }
+loop-svc-model = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }

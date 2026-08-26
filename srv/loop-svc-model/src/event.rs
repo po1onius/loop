@@ -265,6 +265,34 @@ impl Event {
     }
 
     #[tracing::instrument(
+        name = "db.event.select_published_after_id",
+        skip(conn),
+        fields(
+            db.system = "postgresql",
+            db.operation = "select",
+            db.table = "events",
+            event.after_id = after_id,
+            event.limit = limit,
+        )
+    )]
+    pub async fn select_published_after_id(
+        after_id: i64,
+        limit: i64,
+        conn: &mut DieselConn,
+    ) -> Result<Vec<Self>, diesel::result::Error> {
+        // 启动重建索引使用主键游标读取，避免 OFFSET 在大数据量下反复扫描，
+        // 也避免其他实例发布新活动时造成分页记录重复或跳过。
+        events::table
+            .filter(events::status.eq("published"))
+            .filter(events::event_id.gt(after_id))
+            .order(events::event_id.asc())
+            .limit(limit)
+            .select(Self::as_select())
+            .load::<Self>(conn)
+            .await
+    }
+
+    #[tracing::instrument(
         name = "db.event.select_owned",
         skip(conn),
         fields(
@@ -349,6 +377,29 @@ impl Event {
         events::table
             .filter(events::event_id.eq(event_id))
             .filter(events::status.eq("published"))
+            .select(Self::as_select())
+            .first::<Self>(conn)
+            .await
+            .optional()
+    }
+
+    #[tracing::instrument(
+        name = "db.event.select_by_id",
+        skip(conn),
+        fields(
+            db.system = "postgresql",
+            db.operation = "select",
+            db.table = "events",
+            event.id = event_id,
+        )
+    )]
+    pub async fn select_by_id(
+        event_id: i64,
+        conn: &mut DieselConn,
+    ) -> Result<Option<Self>, diesel::result::Error> {
+        // worker 必须读取任意状态，才能在活动取消时把已经公开的文档从索引删除。
+        events::table
+            .filter(events::event_id.eq(event_id))
             .select(Self::as_select())
             .first::<Self>(conn)
             .await
