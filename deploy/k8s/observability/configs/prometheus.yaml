@@ -1,0 +1,14 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  # 当前业务服务都是单副本；扩容时改为按 Pod 发现，避免 Service 分流采样。
+  - job_name: loop-api-svc
+    static_configs:
+      - targets: [loop-api-svc:3000]
+  - job_name: loop-realtime-svc
+    static_configs:
+      - targets: [loop-realtime-svc:3010]
+  - job_name: prometheus
+    static_configs:
+      - targets: [localhost:9090]

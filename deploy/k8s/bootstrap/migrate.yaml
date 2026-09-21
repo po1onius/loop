@@ -1,0 +1,41 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: loop-migrate
+  labels:
+    app.kubernetes.io/name: loop-migrate
+    app.kubernetes.io/part-of: loop
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: loop-migrate
+        app.kubernetes.io/part-of: loop
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      containers:
+        - name: migrate
+          image: loop-migrate
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: loop-secrets
+                  key: DATABASE_URL
+          command:
+            - /bin/sh
+            - -ec
+          args:
+            - |
+              echo "Starting database initialization"
+              diesel migration run --migration-dir /migrations
+              echo "Database initialization completed"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi

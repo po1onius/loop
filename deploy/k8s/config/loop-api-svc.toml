@@ -1,0 +1,15 @@
+access_ttl = 900
+refresh_ttl = 2592000
+
+[perm]
+perm_ver = 1
+
+[perm.role_perm]
+user = ["user.profile.read", "user.profile.update", "event.read", "event.join", "event.create", "media.upload", "community.read", "community.post.create", "community.message.create"]
+organizer = ["user.profile.read", "user.profile.update", "event.read", "event.join", "event.create", "event.update_own", "media.upload", "community.read", "community.post.create", "community.message.create"]
+admin = ["*"]
+
+[media]
+presign_expires_secs = 900
+max_upload_bytes = 10485760
+allowed_mime_types = ["image/jpeg", "image/png", "image/webp", "image/gif"]

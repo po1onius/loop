@@ -1,0 +1,68 @@
+logging {
+  level  = "info"
+  format = "logfmt"
+}
+
+// 通过 Kubernetes API 采集三个业务服务的标准输出，不依赖节点日志路径。
+discovery.kubernetes "loop" {
+  role = "pod"
+  namespaces {
+    names = [sys.env("POD_NAMESPACE")]
+  }
+  selectors {
+    role  = "pod"
+    label = "app.kubernetes.io/part-of=loop"
+  }
+}
+
+discovery.relabel "loop" {
+  targets = discovery.kubernetes.loop.targets
+  rule {
+    source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_name"]
+    regex         = "loop-(api|realtime|worker)-svc"
+    action        = "keep"
+  }
+  rule {
+    source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_name"]
+    target_label  = "service_name"
+  }
+  rule {
+    source_labels = ["__meta_kubernetes_namespace"]
+    target_label  = "namespace"
+  }
+  rule {
+    source_labels = ["__meta_kubernetes_pod_name"]
+    target_label  = "pod"
+  }
+  rule {
+    source_labels = ["__meta_kubernetes_pod_container_name"]
+    target_label  = "container"
+  }
+}
+
+loki.source.kubernetes "loop" {
+  targets    = discovery.relabel.loop.output
+  forward_to = [loki.process.loop.receiver]
+}
+
+loki.process "loop" {
+  stage.json {
+    expressions = {
+      level    = "level",
+      trace_id = "trace_id",
+    }
+  }
+  stage.labels {
+    values = { level = "level" }
+  }
+  stage.structured_metadata {
+    values = { trace_id = "trace_id" }
+  }
+  forward_to = [loki.write.local.receiver]
+}
+
+loki.write "local" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

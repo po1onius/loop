@@ -1,0 +1,53 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: loop-minio-init
+  labels:
+    app.kubernetes.io/name: loop-minio-init
+    app.kubernetes.io/part-of: loop
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: loop-minio-init
+        app.kubernetes.io/part-of: loop
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      containers:
+        - name: minio-init
+          image: loop-minio-client
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: loop-secrets
+                  key: MINIO_ROOT_USER
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: loop-secrets
+                  key: MINIO_ROOT_PASSWORD
+            - name: LOOP_S3_BUCKET
+              valueFrom:
+                configMapKeyRef:
+                  name: loop-env
+                  key: LOOP_S3_BUCKET
+          command:
+            - /bin/sh
+            - -ec
+          args:
+            - |
+              echo "Initializing development media bucket"
+              mc --config-dir /tmp/mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"
+              mc --config-dir /tmp/mc mb --ignore-existing "local/$LOOP_S3_BUCKET"
+              mc --config-dir /tmp/mc anonymous set download "local/$LOOP_S3_BUCKET"
+              echo "Media bucket initialized with public read access"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi

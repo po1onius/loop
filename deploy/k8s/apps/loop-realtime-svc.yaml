@@ -1,0 +1,112 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: loop-realtime-svc
+  labels:
+    app.kubernetes.io/name: loop-realtime-svc
+    app.kubernetes.io/part-of: loop
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: loop-realtime-svc
+      app.kubernetes.io/part-of: loop
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: loop-realtime-svc
+        app.kubernetes.io/part-of: loop
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: loop-realtime-svc
+          image: loop-realtime-svc
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: loop-env
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: loop-secrets
+                  key: DATABASE_URL
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: loop-secrets
+                  key: REDIS_URL
+            - name: LOOP_HTTP_ADDR
+              value: 0.0.0.0:3010
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: logs
+              mountPath: /app/log
+            - name: jwt
+              mountPath: /etc/loop/secrets
+              readOnly: true
+          ports:
+            - name: http
+              containerPort: 3010
+          startupProbe:
+            httpGet:
+              path: /metrics
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 6
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      volumes:
+        - name: logs
+          emptyDir:
+            sizeLimit: 1Gi
+        - name: jwt
+          secret:
+            secretName: loop-jwt
+            defaultMode: 0440
+            items:
+              - key: jwt_public.pem
+                path: jwt_public.pem
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: loop-realtime-svc
+  labels:
+    app.kubernetes.io/name: loop-realtime-svc
+    app.kubernetes.io/part-of: loop
+spec:
+  selector:
+    app.kubernetes.io/name: loop-realtime-svc
+    app.kubernetes.io/part-of: loop
+  ports:
+    - name: http
+      port: 3010
+      targetPort: http

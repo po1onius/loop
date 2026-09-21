@@ -1,0 +1,23 @@
+# 社区版最新发布仅提供源码，固定 release 自行构建。
+# 在仓库根目录分别使用 --target server / --target client 构建。
+FROM docker.io/golang:1.27.1-trixie AS builder
+ENV CGO_ENABLED=0
+RUN go install github.com/minio/minio@RELEASE.2025-10-15T17-29-55Z
+RUN go install github.com/minio/mc@RELEASE.2025-08-13T08-35-41Z
+
+FROM docker.io/debian:trixie-slim AS runtime
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+FROM runtime AS server
+COPY --from=builder /go/bin/minio /usr/local/bin/minio
+USER 1000:1000
+EXPOSE 9000 9001
+ENTRYPOINT ["minio"]
+CMD ["server", "/data", "--console-address", ":9001"]
+
+FROM runtime AS client
+COPY --from=builder /go/bin/mc /usr/local/bin/mc
+USER 1000:1000
+ENTRYPOINT ["mc"]

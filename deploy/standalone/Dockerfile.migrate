@@ -36,3 +36,6 @@ RUN apt-get update \
 COPY --from=diesel-cli-downloader /usr/local/bin/diesel /usr/local/bin/diesel
 
 WORKDIR /work
+
+# 同一镜像也供 Kubernetes 初始化 Job 使用；单机部署仍可挂载本地 migration。
+COPY srv/migrations /migrations

@@ -1,0 +1,13 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: loop
+resources:
+  - migrate.yaml
+  - minio-init.yaml
+images:
+  - name: loop-migrate
+    newName: registry.example.com/loop/loop-migrate
+    newTag: dev
+  - name: loop-minio-client
+    newName: registry.example.com/loop/loop-minio-client
+    newTag: RELEASE.2025-08-13T08-35-41Z
