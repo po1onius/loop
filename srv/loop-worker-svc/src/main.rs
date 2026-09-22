@@ -15,12 +15,15 @@ use loop_infra::{
     config::InfraConfig,
     observability::{ObservabilityConfig, init as init_observability},
 };
-use loop_messaging::{
-    CLOUD_EVENTS_JSON_CONTENT_TYPE, MessageContract, MessageEnvelope,
-    event::{EVENT_SEARCH_REFRESH_ROUTING_KEY, EventSearchRefreshV1},
-};
 use loop_search::EventSearchService;
-use loop_svc_model::{event::Event, outbox::AsyncOutbox};
+use loop_svc_model::{
+    event::Event,
+    messaging::{
+        CLOUD_EVENTS_JSON_CONTENT_TYPE, MessageContract, MessageEnvelope,
+        event::{EVENT_SEARCH_REFRESH_ROUTING_KEY, EventSearchRefreshV1},
+    },
+    outbox::AsyncOutbox,
+};
 use std::{process::ExitCode, time::Duration};
 
 const EVENT_EXCHANGE: &str = "loop.events.v1";

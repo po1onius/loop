@@ -24,10 +24,9 @@ app目录下，使用`react native` + typescript实现的客户端app
 1. loop-api-svc: 客户端主 HTTP API，承载账号、活动、媒体上传入口、报名、社区等普通请求/响应型业务
 2. loop-realtime-svc: WebSocket 长连接服务，当前承载帖子讨论消息通知，后续复用到活动群聊、在线状态等实时能力
 3. loop-worker-svc: 异步任务进程，当前负责 PostgreSQL outbox 投递、RabbitMQ 活动搜索消息消费和 Meilisearch 索引更新
-4. loop-messaging: 跨业务模块共用的消息 envelope、版本约定和强类型 payload 契约
-5. loop-search: API 与 worker 共用的活动搜索索引 schema、查询和写入逻辑
-6. loop-svc-model: 服务器数据结构以及相关数据库操作
-7. loop-infra: 数据库、Redis、RabbitMQ、Meilisearch、对象存储、邮件、可观测性等基础设施封装
+4. loop-search: API 与 worker 共用的活动搜索索引 schema、查询和写入逻辑
+5. loop-svc-model: 服务端共享模型、消息契约及数据库操作；`messaging` 模块定义消息 envelope、版本约定和强类型 payload，`outbox` 模块负责消息持久化
+6. loop-infra: 数据库、Redis、RabbitMQ、Meilisearch、对象存储、邮件、可观测性等基础设施封装
 
 后端服务按运行特征拆分，而不是按页面或业务名提前拆分。当前阶段普通业务优先沉淀在 `loop-api-svc` 的内部模块中，避免社区、活动、报名、用户关系等高耦合功能过早跨服务调用。只有长连接、异步任务、媒体处理、搜索索引、通知推送等运行模型明显不同的能力，才在需要时拆成独立进程或 worker。
 
@@ -45,6 +44,55 @@ app目录下，使用`react native` + typescript实现的客户端app
 镜像构建、凭证准备、部署命令和排查方法见 [Kubernetes 部署说明](deploy/k8s/README.md)。
 
 ## 本地开发
+
+### Guix 构建环境
+
+根目录的 `guix.scm` 定义后端 Rust 和前端 Expo/TypeScript 共用的构建环境，包含 Rust、Cargo、rustfmt、Clippy、Node/npm、C/C++ 工具链、CMake、pkg-config、OpenSSL、CA 证书和 PostgreSQL 客户端库。软件包使用当前 Guix channels 提供的版本，更新环境前可在宿主机执行 `guix pull`。
+
+从仓库根目录进入容器：
+
+```bash
+guix shell -C -N -F -D -f guix.scm
+```
+
+`-C` 创建隔离容器，`-N` 允许下载 Cargo/npm 依赖，`-F` 提供 npm 原生二进制可能需要的标准 Linux 路径。`-D -f guix.scm` 显式加载该开发包的依赖，不要求预先授权自动加载。当前仓库目录会自动以可写方式共享进容器，构建产物会保留在宿主机。
+
+如果 crates.io 或 npm 下载超时，需要先调整宿主机网络；使用代理时，在上述命令中添加 `-E '^(https?|all|no)_proxy$|^(HTTPS?|ALL|NO)_PROXY$'`，把已设置的代理变量传入容器。如果 Cargo 报告 Rust 版本低于依赖的最低要求，需要更新提供 Rust 工具链的 Guix channel 后重新进入环境。
+
+容器中的 home 是临时目录。进入后先把依赖缓存设置到仓库内，再执行构建：
+
+```bash
+# 在仓库根目录设置；.cache/guix/ 已加入 .gitignore。
+export CARGO_HOME="$PWD/.cache/guix/cargo"
+export npm_config_cache="$PWD/.cache/guix/npm"
+
+cd srv
+cargo build --workspace --locked
+cargo fmt --all --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+
+cd ../app
+npm ci
+npm run build:rich-editor
+npx tsc --noEmit
+npm run lint
+# 如需构建 Web 静态产物：
+npx expo export --platform web
+```
+
+如果希望交互式 `guix shell -C` 自动读取配置，可在宿主机的仓库根目录执行一次：
+
+```bash
+mkdir -p ~/.config/guix
+pwd -P >> ~/.config/guix/shell-authorized-directories
+guix shell -C -N -F
+```
+
+自动加载只适用于交互式 shell；通过 `-- COMMAND` 执行命令时仍需显式使用 `-D -f guix.scm`。这些参数的完整含义见 [Guix shell 官方说明](https://guix.gnu.org/manual/devel/en/guix.html#Invoking-guix-shell)。
+
+该环境用于后端构建、前端静态检查与 Web 导出。Android/iOS 原生安装包仍需各自的 SDK 和平台工具。`make backend-up` 涉及 Podman Compose，应在配置好 Podman 的宿主机执行；数据库、Redis、RabbitMQ 等运行服务不由这个构建容器启动。
+
+### 启动本地服务
 
 仓库根目录的 `Makefile` 会启动依赖、执行初始化 migration，并同时运行 API 与 realtime 服务。首次使用先准备单机环境文件和 JWT 密钥：
 

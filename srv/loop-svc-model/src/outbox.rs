@@ -1,10 +1,10 @@
-use crate::DieselConn;
+use crate::{
+    DieselConn,
+    messaging::{MessageContract, MessageEnvelope, event::EventSearchRefreshV1, service_source},
+};
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
-use loop_messaging::{
-    MessageContract, MessageEnvelope, event::EventSearchRefreshV1, service_source,
-};
 use uuid::Uuid;
 
 table! {

@@ -1,6 +1,7 @@
 # Rust build outputs
 target/
 .codex-target/
+.cache/guix/
 
 # JavaScript / Expo local outputs
 node_modules/

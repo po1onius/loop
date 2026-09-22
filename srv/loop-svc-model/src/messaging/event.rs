@@ -1,4 +1,4 @@
-use crate::MessageContract;
+use super::MessageContract;
 use serde::{Deserialize, Serialize};
 
 pub const EVENT_SEARCH_REFRESH_ROUTING_KEY: &str = "event.search.refresh.v1";

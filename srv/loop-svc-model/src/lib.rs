@@ -1,6 +1,7 @@
 pub mod account;
 pub mod community;
 pub mod event;
+pub mod messaging;
 pub mod outbox;
 
 use deadpool::managed::Object;

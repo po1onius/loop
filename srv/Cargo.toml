@@ -1,7 +1,6 @@
 [workspace]
 members = [
     "loop-infra",
-    "loop-messaging",
     "loop-api-svc",
     "loop-realtime-svc",
     "loop-search",
@@ -51,7 +50,6 @@ tokio-stream = "*"
 tower-cookies = "*"
 loop-svc-model = { path = "loop-svc-model" }
 loop-search = { path = "loop-search" }
-loop-messaging = { path = "loop-messaging" }
 loop-infra = { path = "loop-infra", default-features = false }
 time = "*"
 loop-dto = { path = "../loop-dto" }

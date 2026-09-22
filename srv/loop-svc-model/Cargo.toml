@@ -4,41 +4,13 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-tokio = { workspace = true }
-jsonwebtoken = { workspace = true }
 diesel = { workspace = true }
 diesel-async = { workspace = true }
-anyhow = { workspace = true }
 uuid = { workspace = true }
 thiserror = { workspace = true }
 deadpool = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-bcrypt = { workspace = true }
 tracing = { workspace = true }
-axum = { workspace = true }
-toml = { workspace = true }
-tracing-subscriber = { workspace = true }
-tracing-appender = { workspace = true }
-redis = { workspace = true }
-deadpool-redis = { workspace = true }
-rand = { workspace = true }
-lettre = { workspace = true }
-http = { workspace = true }
-tower-http = { workspace = true }
-sha2 = { workspace = true }
-hex = { workspace = true }
-futures-util = { workspace = true }
-dashmap = { workspace = true }
-tokio-stream = { workspace = true }
-tower-cookies = { workspace = true }
 chrono = { workspace = true }
 ipnet = { workspace = true }
-loop-messaging = { workspace = true }
-
-[dev-dependencies]
-eventsource-stream = "0.2"
-reqwest-eventsource = "0.6"
-futures-util = { version = "*", default-features = false, features = ["sink", "std"] }
-reqwest = { version = "*", default-features = false, features = ["json", "rustls-tls", "stream"] }
-

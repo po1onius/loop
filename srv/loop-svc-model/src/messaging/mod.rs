@@ -1,3 +1,5 @@
+//! 服务间共享的消息 envelope、版本约定和强类型 payload 契约。
+
 pub mod event;
 
 use chrono::{DateTime, Utc};
