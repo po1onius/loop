@@ -90,7 +90,7 @@ guix shell -C -N -F
 
 自动加载只适用于交互式 shell；通过 `-- COMMAND` 执行命令时仍需显式使用 `-D -f guix.scm`。这些参数的完整含义见 [Guix shell 官方说明](https://guix.gnu.org/manual/devel/en/guix.html#Invoking-guix-shell)。
 
-该环境用于后端构建、前端静态检查与 Web 导出。Android/iOS 原生安装包仍需各自的 SDK 和平台工具。`make backend-up` 涉及 Podman Compose，应在配置好 Podman 的宿主机执行；数据库、Redis、RabbitMQ 等运行服务不由这个构建容器启动。
+该环境用于后端构建、前端静态检查与 Web 导出。Android 原生构建与模拟器使用 [guix/](guix/README.md) 中独立的 Guix 包和 manifest；iOS 构建需要 macOS/Xcode。`make backend-up` 涉及 Podman Compose，应在配置好 Podman 的宿主机执行；数据库、Redis、RabbitMQ 等运行服务不由这个构建容器启动。
 
 ### 启动本地服务
 
