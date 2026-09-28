@@ -1,5 +1,5 @@
 ;; Reproduce the Guix package definitions used for this environment:
-;; guix time-machine -C guix/channels.scm -- shell -L guix/modules -m guix/android.scm
+;; guix time-machine -C guix/channels.scm -- shell -L guix/modules -m guix/env.scm
 (use-modules (guix channels))
 
 (list

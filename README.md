@@ -45,27 +45,17 @@ app目录下，使用`react native` + typescript实现的客户端app
 
 ## 本地开发
 
-### Guix 构建环境
+### Guix 统一开发环境
 
-根目录的 `guix.scm` 定义后端 Rust 和前端 Expo/TypeScript 共用的构建环境，包含 Rust、Cargo、rustfmt、Clippy、Node/npm、C/C++ 工具链、CMake、pkg-config、OpenSSL、CA 证书和 PostgreSQL 客户端库。软件包使用当前 Guix channels 提供的版本，更新环境前可在宿主机执行 `guix pull`。
-
-从仓库根目录进入容器：
+[guix/env.scm](guix/env.scm) 统一提供 Android SDK/NDK/JDK、模拟器、Rust/Cargo/rustfmt/Clippy、Node/npm、C/C++ 工具链、CMake、pkg-config、OpenSSL、PostgreSQL 客户端库。从仓库根目录进入：
 
 ```bash
-guix shell -C -N -F -D -f guix.scm
+guix shell -L guix/modules -m guix/env.scm
 ```
 
-`-C` 创建隔离容器，`-N` 允许下载 Cargo/npm 依赖，`-F` 提供 npm 原生二进制可能需要的标准 Linux 路径。`-D -f guix.scm` 显式加载该开发包的依赖，不要求预先授权自动加载。当前仓库目录会自动以可写方式共享进容器，构建产物会保留在宿主机。
-
-如果 crates.io 或 npm 下载超时，需要先调整宿主机网络；使用代理时，在上述命令中添加 `-E '^(https?|all|no)_proxy$|^(HTTPS?|ALL|NO)_PROXY$'`，把已设置的代理变量传入容器。如果 Cargo 报告 Rust 版本低于依赖的最低要求，需要更新提供 Rust 工具链的 Guix channel 后重新进入环境。
-
-容器中的 home 是临时目录。进入后先把依赖缓存设置到仓库内，再执行构建：
+可以在多个终端使用同一命令，分别运行模拟器、`make backend-run` 和前端。普通 Guix shell 保留宿主网络、桌面、KVM 及用户缓存。Podman/Compose 由宿主机安装，容器先在宿主机通过 `make infra-up` 单独启动和初始化；Guix manifest 不包含容器工具。Android 模拟器访问宿主 API 使用 `10.0.2.2`。完整的后端构建、前端启动、Android 安装及地址配置见 [统一开发环境说明](guix/README.md)。iOS 构建仍需要 macOS/Xcode。
 
 ```bash
-# 在仓库根目录设置；.cache/guix/ 已加入 .gitignore。
-export CARGO_HOME="$PWD/.cache/guix/cargo"
-export npm_config_cache="$PWD/.cache/guix/npm"
-
 cd srv
 cargo build --workspace --locked
 cargo fmt --all --check
@@ -76,25 +66,21 @@ npm ci
 npm run build:rich-editor
 npx tsc --noEmit
 npm run lint
-# 如需构建 Web 静态产物：
-npx expo export --platform web
 ```
 
-如果希望交互式 `guix shell -C` 自动读取配置，可在宿主机的仓库根目录执行一次：
+Gradle/npm 下载的 Linux 预编译程序可能要求 `/lib64/ld-linux-x86-64.so.2` 等标准路径；在 Guix System 上需要 FHS 时，使用同一份 manifest 进入构建容器：
 
 ```bash
-mkdir -p ~/.config/guix
-pwd -P >> ~/.config/guix/shell-authorized-directories
-guix shell -C -N -F
+guix shell -C -N -F -L guix/modules -m guix/env.scm
 ```
 
-自动加载只适用于交互式 shell；通过 `-- COMMAND` 执行命令时仍需显式使用 `-D -f guix.scm`。这些参数的完整含义见 [Guix shell 官方说明](https://guix.gnu.org/manual/devel/en/guix.html#Invoking-guix-shell)。
+容器内编译与普通环境使用相同软件清单，但宿主上的模拟器和 Podman 应继续在普通 shell 中运行。Android NDK 编译需按 [文档](guix/README.md) 清除宿主 GCC 的头文件与链接搜索路径。容器的缓存持久化和 ADB 连接方式也在该文档中说明。
 
-该环境用于后端构建、前端静态检查与 Web 导出。Android 原生构建与模拟器使用 [guix/](guix/README.md) 中独立的 Guix 包和 manifest；iOS 构建需要 macOS/Xcode。`make backend-up` 涉及 Podman Compose，应在配置好 Podman 的宿主机执行；数据库、Redis、RabbitMQ 等运行服务不由这个构建容器启动。
+软件包取自当前 Guix channel；`guix/channels.scm` 保存可复现的 channel 提交。若 Rust 版本不满足 Cargo.lock 中依赖的要求，在宿主机更新提供工具链的 channel 后重新进入环境，不降低项目依赖版本。网络下载失败时先检查宿主网络和代理配置。
 
 ### 启动本地服务
 
-仓库根目录的 `Makefile` 会启动依赖、执行初始化 migration，并同时运行 API 与 realtime 服务。首次使用先准备单机环境文件和 JWT 密钥：
+仓库根目录的 `Makefile` 分别提供容器初始化和业务进程启动入口。首次使用先在宿主机准备单机环境文件和 JWT 密钥：
 
 ```bash
 cp deploy/standalone/examples/.env.example deploy/standalone/.env
@@ -104,10 +90,14 @@ openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 \
 openssl rsa -pubout \
   -in deploy/standalone/secrets/jwt_private.pem \
   -out deploy/standalone/secrets/jwt_public.pem
-make backend-up
+make infra-up
+
+# 容器初始化成功后进入开发环境，再启动业务进程。
+guix shell -L guix/modules -m guix/env.scm
+make backend-run
 ```
 
-`make backend-up` 会启动 Postgres、Redis、RabbitMQ、Meilisearch 和 SeaweedFS，执行初始化 migration，并同时运行 API、realtime 与 worker。RabbitMQ AMQP 地址为 `127.0.0.1:5672`，管理界面为 `http://127.0.0.1:15672`，示例账号为 `loop` / `looprabbit123`。Meilisearch 地址为 `http://127.0.0.1:7700`。SeaweedFS S3 地址为 `http://127.0.0.1:9000`（映射容器的 `8333` 端口），示例访问密钥为 `loopadmin` / `loopadmin123`。只发布 S3 端口，关闭 Admin UI、WebDAV 和数据湖接口。
+`make infra-up` 在宿主机启动 Postgres、Redis、RabbitMQ、Meilisearch 和 SeaweedFS 等容器，并完成 bucket 初始化和数据库 migration。`make backend-run` 在开发环境中运行 API、realtime 与 worker，不调用容器工具。`make backend-up` 保留为按顺序执行这两个步骤的便捷入口，需要当前环境同时具备宿主容器工具和 Cargo。RabbitMQ AMQP 地址为 `127.0.0.1:5672`，管理界面为 `http://127.0.0.1:15672`，示例账号为 `loop` / `looprabbit123`。Meilisearch 地址为 `http://127.0.0.1:7700`。SeaweedFS S3 地址为 `http://127.0.0.1:9000`（映射容器的 `8333` 端口），示例访问密钥为 `loopadmin` / `loopadmin123`。只发布 S3 端口，关闭 Admin UI、WebDAV 和数据湖接口。
 
 如果使用 Android 真机上的 Expo Go 调试客户端，手机不能访问电脑上的 `127.0.0.1`。需要手动把本地服务地址配置成电脑局域网 IP，例如 `192.168.1.23`。
 
@@ -134,11 +124,11 @@ npx expo start
 
 手机和电脑需要在同一局域网内，并确认防火墙允许手机访问电脑的 `3000`、`3010` 和 `9000` 端口。未设置 `EXPO_PUBLIC_REALTIME_URL` 时客户端会退回短轮询，功能仍可使用，但跨设备消息会有数秒延迟。
 
-`make backend-up` 会同时启动 API、realtime 和 worker；任一进程退出时会结束另外两个进程并返回对应退出码，避免本地开发时异步消费静默停止。
+`make backend-run` 会同时启动 API、realtime 和 worker；任一进程退出时会结束另外两个进程并返回对应退出码，避免本地开发时异步消费静默停止。
 
 单机示例中的 RabbitMQ 与 SeaweedFS 凭证直接使用字符串环境变量；需要按实际环境调整 `deploy/standalone/.env` 中的数据库、Redis、RabbitMQ、S3 endpoint、配置文件路径和密码。
 
-单机默认通过 `COMPOSE_FILE='compose.yaml:compose.seaweedfs.yaml'` 加载本地对象存储。`weed mini` 使用 `loop-seaweedfs-data` 卷持久化数据，`s3-init` 使用 AWS CLI 创建 bucket（已存在则复用），然后配置匿名 `GetObject` 和浏览器 GET/HEAD/PUT CORS；匿名上传、删除和列举不开放。`make backend-up` 会等待初始化成功后才启动业务进程。CORS 当前允许所有来源用于开发，部署到公网前修改 [cors.json](deploy/s3/cors.json) 中的 `AllowedOrigins` 为实际前端域名。
+单机默认通过 `COMPOSE_FILE='compose.yaml:compose.seaweedfs.yaml'` 加载本地对象存储。`weed mini` 使用 `loop-seaweedfs-data` 卷持久化数据，`s3-init` 使用 AWS CLI 创建 bucket（已存在则复用），然后配置匿名 `GetObject` 和浏览器 GET/HEAD/PUT CORS；匿名上传、删除和列举不开放。`make infra-up` 等待初始化完成后退出，成功后再执行 `make backend-run`。CORS 当前允许所有来源用于开发，部署到公网前修改 [cors.json](deploy/s3/cors.json) 中的 `AllowedOrigins` 为实际前端域名。
 
 已存在的 `deploy/standalone/.env` 不要覆盖，补充或调整下面的配置；现有 bucket 和访问密钥可以继续使用：
 
@@ -168,13 +158,7 @@ npx tsc --noEmit
 npm run lint
 ```
 
-开发阶段数据库 schema 只保留一份当前初始化 migration，迁移文件位于 `srv/migrations/`。本地执行初始化前需要安装 Diesel CLI：
-
-```bash
-cargo install diesel_cli --no-default-features --features postgres
-```
-
-`make backend-up` 会根据 `deploy/standalone/.env` 组装 `DATABASE_URL` 并执行 migration。当前仍处于开发阶段，数据库表结构、索引和约束以这份初始化 migration 为准；初始化 migration 发生变更后需要手动重建本地开发数据库，再重新执行 `make backend-up`，避免历史 migration 引入兼容分支和冗余逻辑。
+开发阶段数据库 schema 只保留一份当前初始化 migration，迁移文件位于 `srv/migrations/`。`make infra-up` 使用迁移容器执行，无需在 Guix 开发环境安装 Diesel CLI。当前仍处于开发阶段，数据库表结构、索引和约束以这份初始化 migration 为准；初始化 migration 发生变更后需要手动重建本地开发数据库，再重新执行 `make infra-up`。
 
 ### 切换到 AWS S3
 

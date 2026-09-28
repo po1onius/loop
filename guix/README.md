@@ -1,12 +1,12 @@
-# Android Guix 环境
+# Guix 统一开发环境
 
-本目录为 Linux x86_64 提供 Android SDK、NDK、JDK 和模拟器的 Guix 包。包按组件构建，最后组合成标准 SDK 目录；实现参考 [nixpkgs androidenv](https://github.com/NixOS/nixpkgs/tree/master/pkgs/development/mobile/androidenv)。不需要 Android Studio，也没有额外的安装或启动脚本。
+本目录为 Linux x86_64 提供统一的 Android、Rust 和 Node 开发环境。Android SDK、NDK、JDK 和模拟器按组件构建，最后组合成标准 SDK 目录；实现参考 [nixpkgs androidenv](https://github.com/NixOS/nixpkgs/tree/master/pkgs/development/mobile/androidenv)。不需要 Android Studio，也没有额外的安装或启动脚本。
 
 ## 文件与版本
 
 - `modules/loop/android-sources.scm`：固定下载地址、校验值和 Google SDK 组件元数据。
 - `modules/loop/android.scm`：组件包、Linux 主机工具修正、组合 SDK。
-- `android.scm`：本项目 Android 开发 manifest。
+- `env.scm`：Android、Rust、Node 及编译依赖共用的开发 manifest。
 - `channels.scm`：验证环境对应的 Guix channel 提交。
 
 | 组件 | 版本 |
@@ -35,12 +35,19 @@ SDK 和镜像来自 Google，使用受其 [SDK 条款](https://developer.android
 
 ```bash
 guix build -L guix/modules -e '(@ (loop android) android-sdk-with-emulator)'
-guix shell -L guix/modules -m guix/android.scm
+guix shell -L guix/modules -m guix/env.scm
 ```
 
-环境自动提供 `ANDROID_HOME`、`JAVA_HOME`，以及 `adb`、`emulator`、`sdkmanager`、`avdmanager`、Java、Node/npm 等命令。检查已安装组件：
+环境自动提供 `ANDROID_HOME`、`JAVA_HOME`，以及 `adb`、`emulator`、`sdkmanager`、`avdmanager`、Java、Rust/Cargo/rustfmt/Clippy、Node/npm、GCC、CMake、pkg-config、OpenSSL、PostgreSQL 客户端库。Rust 的 Cargo 和工具分别来自 `rust:cargo`、`rust:tools` 输出。普通 shell 中可构建后端、启动前端和模拟器；多个终端使用同一个 manifest。检查已安装组件：
 
 ```bash
+rustc --version
+cargo --version
+cargo fmt --version
+cargo clippy --version
+node --version
+npm --version
+pkg-config --modversion libpq openssl
 java -version
 adb version
 sdkmanager --list_installed
@@ -51,7 +58,7 @@ emulator -accel-check
 
 ```bash
 guix time-machine -C guix/channels.scm -- \
-  shell -L guix/modules -m guix/android.scm
+  shell -L guix/modules -m guix/env.scm
 ```
 
 `ANDROID_HOME` 指向 `/gnu/store` 中的只读组合 SDK。不要在其中执行 `sdkmanager --install`、`--update` 或 `--licenses`。更新组件应修改 Scheme 包定义和校验值，再重新构建环境；缺少某个构建组件时也应显式补充包定义。
@@ -61,7 +68,7 @@ guix time-machine -C guix/channels.scm -- \
 先退出刚进入的环境，再显式启动不读取宿主启动配置的 Bash：
 
 ```bash
-guix shell -L guix/modules -m guix/android.scm -- bash --noprofile --norc
+guix shell -L guix/modules -m guix/env.scm -- bash --noprofile --norc
 command -v adb java sdkmanager
 ```
 
@@ -75,7 +82,7 @@ if status is-interactive; and not set -q GUIX_ENVIRONMENT; and not set -q VIRTUA
 end
 ```
 
-这样进入 Guix 环境或已有 Python 虚拟环境时不会重复激活 base。重新进入 Guix shell 后检查命令位置；也可使用 `guix shell --check -L guix/modules -m guix/android.scm` 检查启动配置是否覆盖环境变量。
+这样进入 Guix 环境或已有 Python 虚拟环境时不会重复激活 base。重新进入 Guix shell 后检查命令位置；也可使用 `guix shell --check -L guix/modules -m guix/env.scm` 检查启动配置是否覆盖环境变量。
 
 ## 创建并启动模拟器
 
@@ -95,47 +102,98 @@ emulator -avd loop-api36
 
 Wayland 桌面可通过 XWayland 显示模拟器；若 Qt 无法连接显示服务，在宿主终端检查 `DISPLAY` 和 XWayland。GPU 驱动问题可手动运行 `emulator -avd loop-api36 -gpu swiftshader`。这些是宿主环境设置，不在项目业务代码中添加兼容逻辑。
 
-## 构建、安装与调试本项目
+## 构建、启动与联调
 
-保持宿主模拟器运行，在另一个终端进入 FHS 构建容器。SDK 自身已由 Guix 打包；FHS 用于 Gradle/npm 下载的额外 Linux 预编译程序，如 Maven AAPT2 和 Hermes。
+以下命令使用 Bash 语法。每个终端都从仓库根目录进入相同环境：
 
 ```bash
-guix shell -C -N -F -L guix/modules -m guix/android.scm
+guix shell -L guix/modules -m guix/env.scm -- bash --noprofile --norc
+```
 
-# 在仓库根目录设置，缓存保留在宿主仓库中。
-export GRADLE_USER_HOME="$PWD/.cache/guix/gradle"
-export npm_config_cache="$PWD/.cache/guix/npm"
+普通 shell 保留宿主桌面、网络、用户 home 和 `/dev/kvm`，适合同时运行后端、Metro 和模拟器。容器工具不放入 manifest。先在宿主机安装并配置 Podman/Compose，执行 `make infra-up` 单独启动容器和完成初始化；开发环境内使用 `make backend-run` 启动 Rust 服务。环境错误应在宿主机修正，不在项目中添加兼容脚本。
 
+### 后端
+
+先按根目录 [README](../README.md#启动本地服务) 准备 `deploy/standalone/.env` 和 JWT 文件。只使用 Android 模拟器时，在 `.env` 中设置：
+
+```bash
+LOOP_S3_ENDPOINT_URL='http://127.0.0.1:9000'
+LOOP_S3_PRESIGN_ENDPOINT_URL='http://10.0.2.2:9000'
+LOOP_S3_PUBLIC_BASE_URL='http://10.0.2.2:9000/loop-local'
+```
+
+`10.0.2.2` 在模拟器内指向宿主机；后端自身仍使用 `127.0.0.1`。若 bucket 名不是 `loop-local`，同步修改公开地址中的 bucket。真机联调则使用宿主局域网 IP。
+
+先在宿主机的独立终端执行 `make infra-up`，成功后在已进入 Guix 环境的终端构建并启动后端：
+
+```bash
+cd srv
+cargo build --workspace --locked
+cargo fmt --all --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cd ..
+make backend-run
+```
+
+`make backend-run` 只加载配置并运行 API、realtime 与 worker，不启动或管理容器。PostgreSQL 库用于 Diesel 的本机编译和链接，数据库服务由宿主机的 Compose 启动。若 Cargo 报工具链版本过低，更新 Guix channel 并重新进入环境；不要用忽略 Rust 版本检查的方式继续构建。
+
+### 前端与 Android 原生构建
+
+在另一个终端按前文启动模拟器，然后在前端终端执行：
+
+```bash
 adb devices -l
 cd app
 npm ci
 npm run build:rich-editor
 
-EXPO_PUBLIC_API_BASE_URL=http://10.0.2.2:3000/loop \
-EXPO_PUBLIC_REALTIME_URL=ws://10.0.2.2:3010/loop/realtime \
-npm run android -- --device
+export EXPO_PUBLIC_API_BASE_URL=http://10.0.2.2:3000/loop
+export EXPO_PUBLIC_REALTIME_URL=ws://10.0.2.2:3010/loop/realtime
+
+# NDK 使用自己的 Android sysroot，不继承本机 GCC 的头文件和链接路径。
+env -u C_INCLUDE_PATH -u CPLUS_INCLUDE_PATH -u CPATH -u LIBRARY_PATH \
+  npm run android -- --device
 ```
 
-`-N` 让容器共享宿主网络，ADB 使用先前在宿主启动的 server。Expo 首次运行会生成被 Git 忽略的 `app/android/`，构建 Debug APK、安装并启动 Metro。后续在 `app/` 执行 `npm start -- --localhost` 可继续 JS 调试；必要时运行 `adb reverse tcp:8081 tcp:8081`，多个设备连接时加 `adb -s <serial>`。
+新增的本机 C/C++ 工具链会设置 `C_INCLUDE_PATH`、`CPLUS_INCLUDE_PATH` 和 `LIBRARY_PATH`。它们用于后端 native crates 及 Node 本机模块编译，但会干扰 NDK 的 Android sysroot。因此只在 Android 构建命令前清除这些变量，不要在整个 shell 中全局取消。Gradle 会接收启动它的命令所传递的环境。
 
-仅构建供上述 x86_64 模拟器使用的 APK（同样在 FHS 环境内）：
+Expo 首次运行会生成被 Git 忽略的 `app/android/`，构建 Debug APK、安装并启动 Metro。已安装开发客户端后，在保留上述 `EXPO_PUBLIC_*` 环境变量的前端终端运行 `npm start -- --localhost` 继续 JS 调试；必要时运行 `adb reverse tcp:8081 tcp:8081`，多个设备连接时加 `adb -s <serial>`。
+
+### Guix System 上的 FHS 构建
+
+manifest 提供软件依赖，普通 `guix shell` 不会创建 `/usr/bin`、`/lib64` 等标准路径。SDK 自身已由 Guix 打包，但 Gradle/npm 下载的额外 Linux 预编译程序（例如 Maven AAPT2、Hermes、esbuild）可能仍依赖这些路径。遇到文件存在却报 `No such file or directory` 或缺少 ELF loader 时，前端构建使用同一份 manifest 的 FHS 模式：
+
+```bash
+# 模拟器与后端继续在宿主普通 shell 中运行，先在宿主执行 adb start-server。
+guix shell -C -N -F -L guix/modules -m guix/env.scm -- bash --noprofile --norc
+
+# 容器 home 是临时目录，缓存放在仓库中保留。
+export CARGO_HOME="$PWD/.cache/guix/cargo"
+export GRADLE_USER_HOME="$PWD/.cache/guix/gradle"
+export npm_config_cache="$PWD/.cache/guix/npm"
+
+adb devices -l
+```
+
+进入后执行上面的前端安装、构建与启动命令。`-N` 共享宿主网络，ADB 连接宿主已启动的 server；`10.0.2.2` 地址配置仍然适用。FHS 环境也可执行 `cd srv && cargo build --workspace --locked`，但模拟器、桌面与 Podman 的运行使用宿主普通环境。这两种进入方式共享 `env.scm`，无需维护两份软件清单。
+
+仅构建供 x86_64 模拟器使用的 APK：
 
 ```bash
 cd app
 npm run build:rich-editor
 npx expo prebuild --platform android --no-install
 cd android
-./gradlew :app:assembleDebug -PreactNativeArchitectures=x86_64 --console=plain --stacktrace
+env -u C_INCLUDE_PATH -u CPLUS_INCLUDE_PATH -u CPATH -u LIBRARY_PATH \
+  ./gradlew :app:assembleDebug -PreactNativeArchitectures=x86_64 --console=plain --stacktrace
 ```
 
-产物位于 `app/android/app/build/outputs/apk/debug/app-debug.apk`。Gradle daemon、依赖和日志使用上面的持久化缓存目录；模拟器日志直接输出到启动它的终端，设备日志用 `adb logcat` 查看。
+产物位于 `app/android/app/build/outputs/apk/debug/app-debug.apk`。普通 shell 默认使用用户缓存；FHS 容器使用上面设置的仓库内缓存。设备日志用 `adb logcat` 查看。
 
-模拟器中的 `10.0.2.2` 指向宿主机。API / WebSocket 可使用上例地址，SeaweedFS 的预签名上传与图片地址同样需要对模拟器可达；后端 `LOOP_S3_PRESIGN_ENDPOINT_URL`、`LOOP_S3_PUBLIC_BASE_URL` 建议配置为宿主局域网 IP，避免返回模拟器自己的 `127.0.0.1`。
-
-Google、Maven、Gradle 或 npm 下载失败时，先修正宿主网络。Guix daemon 的下载网络和交互式 shell 的代理配置需要分别确认。构建容器可通过 `-E '^(https?|all|no)_proxy$|^(HTTPS?|ALL|NO)_PROXY$'` 保留已配置的代理；Java/Gradle 的代理需按其规则配置到用户的 `gradle.properties`，不会自动使用 curl 的代理变量。
+Google、Maven、Gradle、crates.io 或 npm 下载失败时，先修正宿主网络。Guix daemon 的下载网络和交互式 shell 的代理配置需要分别确认。构建容器可通过 `-E '^(https?|all|no)_proxy$|^(HTTPS?|ALL|NO)_PROXY$'` 保留已配置的代理；Java/Gradle 的代理需按其规则配置到用户的 `gradle.properties`，不会自动使用 curl 的代理变量。
 
 ## 更新包
 
 Google 元数据来自 [SDK 仓库](https://dl.google.com/android/repository/repository2-3.xml) 和 [Google APIs 镜像仓库](https://dl.google.com/android/repository/sys-img/google_apis/sys-img2-3.xml)。更新时选择 stable channel，核对归档和校验值，并同步 `package.xml` 对应的 revision、SDK path、type-details 及依赖。构建阶段不调用 sdkmanager 联网下载。
 
-升级 Expo / React Native 后，重新核对依赖中的 Android 版本配置，并同步组合包。更新 Guix 依赖时同步 `channels.scm`。验证应包含 `sdkmanager --list_installed`、NDK/CMake 执行、模拟器启动、项目实际 APK 构建和安装。
+升级 Expo / React Native 后，重新核对依赖中的 Android 版本配置，并同步组合包。更新 Guix 依赖时同步 `channels.scm`。验证应包含 Rust/Node 工具版本、后端构建、`sdkmanager --list_installed`、NDK/CMake 执行、模拟器启动、项目实际 APK 构建和安装。

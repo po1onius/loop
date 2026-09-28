@@ -12,19 +12,26 @@ SRV_DIR := srv
 # 这里固定完整镜像名，避免名称不一致导致重复构建 migrate 镜像。
 MIGRATE_IMAGE := localhost/loop-diesel-cli:standalone
 
-.PHONY: backend-up
-backend-up:
+.PHONY: backend-up infra-up backend-run check-env
+
+# Convenience entry point when both host tools and Cargo are available.
+backend-up: infra-up
+	$(MAKE) backend-run
+
+check-env:
 	@if [[ ! -f "$(LOCAL_ENV)" ]]; then \
 		echo "missing $(LOCAL_ENV)"; \
 		echo "copy deploy/standalone/examples/.env.example to $(LOCAL_ENV) and adjust values"; \
 		exit 1; \
 	fi
+
+# Run on the host: start containers and complete initialization.
+infra-up: check-env
 	@if ! $(COMPOSE) version >/dev/null 2>&1; then \
 		echo "missing compose command: $(COMPOSE)"; \
 		echo "install Podman Compose, or override COMPOSE explicitly"; \
 		exit 1; \
 	fi
-	@mkdir -p "$(SRV_DIR)/log"
 	@set -a; source "$(LOCAL_ENV)"; set +a; \
 	export COMPOSE_FILE="$${COMPOSE_FILE:-compose.yaml:compose.seaweedfs.yaml}"; \
 	: "$${PGDATABASE:?missing PGDATABASE in $(LOCAL_ENV)}"; \
@@ -35,19 +42,8 @@ backend-up:
 	: "$${LOOP_RABBITMQ_URL:?missing LOOP_RABBITMQ_URL in $(LOCAL_ENV)}"; \
 	: "$${LOOP_RABBITMQ_USER:?missing LOOP_RABBITMQ_USER in $(LOCAL_ENV)}"; \
 	: "$${LOOP_RABBITMQ_PASSWORD:?missing LOOP_RABBITMQ_PASSWORD in $(LOCAL_ENV)}"; \
-	: "$${LOOP_HOST_CONFIG_FILE:?missing LOOP_HOST_CONFIG_FILE in $(LOCAL_ENV)}"; \
-	: "$${LOOP_HOST_SECRETS_DIR:?missing LOOP_HOST_SECRETS_DIR in $(LOCAL_ENV)}"; \
-	repo_root="$$(pwd -P)"; \
-	standalone_dir="$${repo_root}/$(STANDALONE_DIR)"; \
-	host_config_file="$${LOOP_HOST_CONFIG_FILE}"; \
-	if [[ "$${host_config_file}" != /* ]]; then host_config_file="$${standalone_dir}/$${host_config_file}"; fi; \
-	host_secrets_dir="$${LOOP_HOST_SECRETS_DIR}"; \
-	if [[ "$${host_secrets_dir}" != /* ]]; then host_secrets_dir="$${standalone_dir}/$${host_secrets_dir}"; fi; \
 	host_log_dir="$${LOOP_HOST_LOG_DIR:-../../srv/log}"; \
-	if [[ "$${host_log_dir}" != /* ]]; then host_log_dir="$${standalone_dir}/$${host_log_dir}"; fi; \
-	[[ -f "$${host_config_file}" ]] || { echo "missing config file: $${host_config_file}"; exit 1; }; \
-	[[ -f "$${host_secrets_dir}/jwt_private.pem" ]] || { echo "missing JWT private key: $${host_secrets_dir}/jwt_private.pem"; exit 1; }; \
-	[[ -f "$${host_secrets_dir}/jwt_public.pem" ]] || { echo "missing JWT public key: $${host_secrets_dir}/jwt_public.pem"; exit 1; }; \
+	if [[ "$${host_log_dir}" != /* ]]; then host_log_dir="$(STANDALONE_DIR)/$${host_log_dir}"; fi; \
 	mkdir -p "$${host_log_dir}"; \
 	( cd "$(STANDALONE_DIR)" && $(COMPOSE) up -d db cache search rabbitmq otel-collector tempo loki alloy prometheus grafana ); \
 	compose_services="$$(cd "$(STANDALONE_DIR)" && $(COMPOSE) config --services)"; \
@@ -63,7 +59,32 @@ backend-up:
 		echo "missing $(MIGRATE_IMAGE), building migrate image..."; \
 		( cd "$(STANDALONE_DIR)" && $(COMPOSE) build migrate ); \
 	fi; \
-	( cd "$(STANDALONE_DIR)" && $(COMPOSE) run --rm migrate ); \
+	( cd "$(STANDALONE_DIR)" && $(COMPOSE) run --rm migrate );
+
+# Run in guix/env.scm: use the already initialized host infrastructure.
+backend-run: check-env
+	@set -a; source "$(LOCAL_ENV)"; set +a; \
+	: "$${PGDATABASE:?missing PGDATABASE in $(LOCAL_ENV)}"; \
+	: "$${PGUSER:?missing PGUSER in $(LOCAL_ENV)}"; \
+	: "$${PGPASSWORD:?missing PGPASSWORD in $(LOCAL_ENV)}"; \
+	: "$${LOOP_REDIS_PASSWORD:?missing LOOP_REDIS_PASSWORD in $(LOCAL_ENV)}"; \
+	: "$${LOOP_MEILISEARCH_MASTER_KEY:?missing LOOP_MEILISEARCH_MASTER_KEY in $(LOCAL_ENV)}"; \
+	: "$${LOOP_RABBITMQ_URL:?missing LOOP_RABBITMQ_URL in $(LOCAL_ENV)}"; \
+	: "$${LOOP_HOST_CONFIG_FILE:?missing LOOP_HOST_CONFIG_FILE in $(LOCAL_ENV)}"; \
+	: "$${LOOP_HOST_SECRETS_DIR:?missing LOOP_HOST_SECRETS_DIR in $(LOCAL_ENV)}"; \
+	repo_root="$$(pwd -P)"; \
+	standalone_dir="$${repo_root}/$(STANDALONE_DIR)"; \
+	host_config_file="$${LOOP_HOST_CONFIG_FILE}"; \
+	if [[ "$${host_config_file}" != /* ]]; then host_config_file="$${standalone_dir}/$${host_config_file}"; fi; \
+	host_secrets_dir="$${LOOP_HOST_SECRETS_DIR}"; \
+	if [[ "$${host_secrets_dir}" != /* ]]; then host_secrets_dir="$${standalone_dir}/$${host_secrets_dir}"; fi; \
+	host_log_dir="$${LOOP_HOST_LOG_DIR:-../../srv/log}"; \
+	if [[ "$${host_log_dir}" != /* ]]; then host_log_dir="$${standalone_dir}/$${host_log_dir}"; fi; \
+	[[ -f "$${host_config_file}" ]] || { echo "missing config file: $${host_config_file}"; exit 1; }; \
+	[[ -f "$${host_secrets_dir}/jwt_private.pem" ]] || { echo "missing JWT private key: $${host_secrets_dir}/jwt_private.pem"; exit 1; }; \
+	[[ -f "$${host_secrets_dir}/jwt_public.pem" ]] || { echo "missing JWT public key: $${host_secrets_dir}/jwt_public.pem"; exit 1; }; \
+	mkdir -p "$${host_log_dir}"; \
+	echo "Starting API, realtime and worker using existing infrastructure..."; \
 	export DATABASE_URL="postgresql://$${PGUSER}:$${PGPASSWORD}@localhost:$${LOOP_PG_PORT:-5132}/$${PGDATABASE}"; \
 	export REDIS_URL="redis://:$${LOOP_REDIS_PASSWORD}@localhost:$${LOOP_REDIS_PORT:-6319}"; \
 	export MEILISEARCH_URL="http://127.0.0.1:$${LOOP_MEILISEARCH_PORT:-7700}"; \
