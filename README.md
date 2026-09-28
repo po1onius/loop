@@ -138,7 +138,7 @@ npx expo start
 
 单机示例中的 RabbitMQ 与 SeaweedFS 凭证直接使用字符串环境变量；需要按实际环境调整 `deploy/standalone/.env` 中的数据库、Redis、RabbitMQ、S3 endpoint、配置文件路径和密码。
 
-单机默认通过 `COMPOSE_FILE='compose.yaml:compose.seaweedfs.yaml'` 加载本地对象存储。`weed mini` 使用 `loop-seaweedfs-data` 卷持久化数据并创建 bucket，`s3-init` 使用 AWS CLI 配置匿名 `GetObject` 和浏览器 GET/HEAD/PUT CORS；匿名上传、删除和列举不开放。`make backend-up` 会等待初始化成功后才启动业务进程。CORS 当前允许所有来源用于开发，部署到公网前修改 [cors.json](deploy/s3/cors.json) 中的 `AllowedOrigins` 为实际前端域名。
+单机默认通过 `COMPOSE_FILE='compose.yaml:compose.seaweedfs.yaml'` 加载本地对象存储。`weed mini` 使用 `loop-seaweedfs-data` 卷持久化数据，`s3-init` 使用 AWS CLI 创建 bucket（已存在则复用），然后配置匿名 `GetObject` 和浏览器 GET/HEAD/PUT CORS；匿名上传、删除和列举不开放。`make backend-up` 会等待初始化成功后才启动业务进程。CORS 当前允许所有来源用于开发，部署到公网前修改 [cors.json](deploy/s3/cors.json) 中的 `AllowedOrigins` 为实际前端域名。
 
 已存在的 `deploy/standalone/.env` 不要覆盖，补充或调整下面的配置；现有 bucket 和访问密钥可以继续使用：
 

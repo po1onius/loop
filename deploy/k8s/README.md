@@ -84,7 +84,7 @@ kubectl -n loop logs job/loop-migrate
 kubectl -n loop logs job/loop-s3-init
 ```
 
-两个 Job 成功后再启动业务服务。数据库 Job 只执行现有的初始化 migration；SeaweedFS 启动时创建 `LOOP_S3_BUCKET` 对应的 bucket（默认 `loop-dev`）；S3 Job 使用共享的 [初始化脚本](../s3/init.sh) 配置匿名 `GetObject` 和 GET/HEAD/PUT CORS，写入仍需凭证或预签名 URL。匿名列举和删除不开放。开发 CORS 默认允许所有来源，公网部署前将 [cors.json](../s3/cors.json) 的 `AllowedOrigins` 改为实际前端域名。
+两个 Job 成功后再启动业务服务。数据库 Job 只执行现有的初始化 migration；S3 Job 使用共享的 [初始化脚本](../s3/init.sh) 创建 `LOOP_S3_BUCKET` 对应的 bucket（默认 `loop-dev`，已存在则复用），然后配置匿名 `GetObject` 和 GET/HEAD/PUT CORS，写入仍需凭证或预签名 URL。匿名列举和删除不开放。开发 CORS 默认允许所有来源，公网部署前将 [cors.json](../s3/cors.json) 的 `AllowedOrigins` 改为实际前端域名。
 
 Kubernetes 不提供 Compose 的 `depends_on`，因此这里显式分阶段部署。初始化失败时先查看 Job 日志并修正配置，再删除对应的失败 Job、重新应用 `bootstrap/`。Job 的 Pod 模板不可原地修改；需要重新运行时同样先删除对应 Job。完成的 Job 会保留，便于查看日志。
 

@@ -11,10 +11,23 @@ export AWS_EC2_METADATA_DISABLED=true
 
 trap 'status=$?; if [ "$status" -ne 0 ]; then echo "S3 bucket initialization failed (exit=$status)" >&2; fi' EXIT
 
-# SeaweedFS mini creates the bucket before opening its S3 listener.
-# Fail on configuration/authentication errors instead of treating them as a missing bucket.
+# A healthy S3 listener does not imply that the application bucket exists.
+# Bootstrap owns bucket creation; only a HeadBucket 404 means it is missing.
 echo "Checking S3 bucket: $LOOP_S3_BUCKET"
-aws s3api head-bucket --bucket "$LOOP_S3_BUCKET"
+if aws s3api head-bucket --bucket "$LOOP_S3_BUCKET" 2>/tmp/loop-s3-head-error; then
+  echo "S3 bucket already exists: $LOOP_S3_BUCKET"
+elif grep -Fq 'An error occurred (404) when calling the HeadBucket operation' /tmp/loop-s3-head-error; then
+  echo "Creating S3 bucket: $LOOP_S3_BUCKET (region=$AWS_DEFAULT_REGION)"
+  if [ "$AWS_DEFAULT_REGION" = "us-east-1" ]; then
+    aws s3api create-bucket --bucket "$LOOP_S3_BUCKET"
+  else
+    aws s3api create-bucket --bucket "$LOOP_S3_BUCKET" \
+      --create-bucket-configuration "LocationConstraint=$AWS_DEFAULT_REGION"
+  fi
+else
+  cat /tmp/loop-s3-head-error >&2
+  exit 1
+fi
 
 echo "Configuring anonymous GetObject access for bucket: $LOOP_S3_BUCKET"
 cat > /tmp/loop-s3-public-read.json <<EOF

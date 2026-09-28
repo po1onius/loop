@@ -66,11 +66,6 @@ spec:
                 secretKeyRef:
                   name: loop-secrets
                   key: LOOP_S3_SECRET_ACCESS_KEY
-            - name: S3_BUCKET
-              valueFrom:
-                configMapKeyRef:
-                  name: loop-env
-                  key: LOOP_S3_BUCKET
           resources:
             requests:
               cpu: 100m
