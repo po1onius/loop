@@ -52,12 +52,18 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: loop-secrets
-                  key: MINIO_ROOT_USER
+                  key: LOOP_S3_ACCESS_KEY_ID
             - name: LOOP_S3_SECRET_ACCESS_KEY
               valueFrom:
                 secretKeyRef:
                   name: loop-secrets
-                  key: MINIO_ROOT_PASSWORD
+                  key: LOOP_S3_SECRET_ACCESS_KEY
+            - name: LOOP_S3_SESSION_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: loop-secrets
+                  key: LOOP_S3_SESSION_TOKEN
+                  optional: true
           resources:
             requests:
               cpu: 100m

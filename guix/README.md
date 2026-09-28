@@ -130,7 +130,7 @@ cd android
 
 产物位于 `app/android/app/build/outputs/apk/debug/app-debug.apk`。Gradle daemon、依赖和日志使用上面的持久化缓存目录；模拟器日志直接输出到启动它的终端，设备日志用 `adb logcat` 查看。
 
-模拟器中的 `10.0.2.2` 指向宿主机。API / WebSocket 可使用上例地址，MinIO 的预签名上传与图片地址同样需要对模拟器可达；后端 `LOOP_S3_ENDPOINT_URL`、`LOOP_S3_PUBLIC_BASE_URL` 建议配置为宿主局域网 IP，避免返回模拟器自己的 `127.0.0.1`。
+模拟器中的 `10.0.2.2` 指向宿主机。API / WebSocket 可使用上例地址，SeaweedFS 的预签名上传与图片地址同样需要对模拟器可达；后端 `LOOP_S3_PRESIGN_ENDPOINT_URL`、`LOOP_S3_PUBLIC_BASE_URL` 建议配置为宿主局域网 IP，避免返回模拟器自己的 `127.0.0.1`。
 
 Google、Maven、Gradle 或 npm 下载失败时，先修正宿主网络。Guix daemon 的下载网络和交互式 shell 的代理配置需要分别确认。构建容器可通过 `-E '^(https?|all|no)_proxy$|^(HTTPS?|ALL|NO)_PROXY$'` 保留已配置的代理；Java/Gradle 的代理需按其规则配置到用户的 `gradle.properties`，不会自动使用 curl 的代理变量。
 

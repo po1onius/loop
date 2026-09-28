@@ -6,8 +6,4 @@ resources:
   - redis.yaml
   - rabbitmq.yaml
   - meilisearch.yaml
-  - minio.yaml
-images:
-  - name: loop-minio
-    newName: registry.example.com/loop/loop-minio
-    newTag: RELEASE.2025-10-15T17-29-55Z
+  - seaweedfs.yaml

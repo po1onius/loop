@@ -1,0 +1,62 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: loop-s3-init
+  labels:
+    app.kubernetes.io/name: loop-s3-init
+    app.kubernetes.io/part-of: loop
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: loop-s3-init
+        app.kubernetes.io/part-of: loop
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      containers:
+        - name: s3-init
+          image: docker.io/amazon/aws-cli:2.37.4
+          command: ["/bin/sh", "/etc/loop/s3/init.sh"]
+          env:
+            - name: AWS_ENDPOINT_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: loop-env
+                  key: LOOP_S3_ENDPOINT_URL
+            - name: AWS_DEFAULT_REGION
+              valueFrom:
+                configMapKeyRef:
+                  name: loop-env
+                  key: LOOP_S3_REGION
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: loop-secrets
+                  key: LOOP_S3_ACCESS_KEY_ID
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: loop-secrets
+                  key: LOOP_S3_SECRET_ACCESS_KEY
+            - name: LOOP_S3_BUCKET
+              valueFrom:
+                configMapKeyRef:
+                  name: loop-env
+                  key: LOOP_S3_BUCKET
+          volumeMounts:
+            - name: config
+              mountPath: /etc/loop/s3
+              readOnly: true
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+      volumes:
+        - name: config
+          configMap:
+            name: loop-s3-bootstrap

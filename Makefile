@@ -26,6 +26,7 @@ backend-up:
 	fi
 	@mkdir -p "$(SRV_DIR)/log"
 	@set -a; source "$(LOCAL_ENV)"; set +a; \
+	export COMPOSE_FILE="$${COMPOSE_FILE:-compose.yaml:compose.seaweedfs.yaml}"; \
 	: "$${PGDATABASE:?missing PGDATABASE in $(LOCAL_ENV)}"; \
 	: "$${PGUSER:?missing PGUSER in $(LOCAL_ENV)}"; \
 	: "$${PGPASSWORD:?missing PGPASSWORD in $(LOCAL_ENV)}"; \
@@ -48,16 +49,21 @@ backend-up:
 	[[ -f "$${host_secrets_dir}/jwt_private.pem" ]] || { echo "missing JWT private key: $${host_secrets_dir}/jwt_private.pem"; exit 1; }; \
 	[[ -f "$${host_secrets_dir}/jwt_public.pem" ]] || { echo "missing JWT public key: $${host_secrets_dir}/jwt_public.pem"; exit 1; }; \
 	mkdir -p "$${host_log_dir}"; \
-	( cd "$(STANDALONE_DIR)" && $(COMPOSE) -f compose.yaml up -d db cache search rabbitmq minio minio-init otel-collector tempo loki alloy prometheus grafana ); \
-	until ( cd "$(STANDALONE_DIR)" && $(COMPOSE) -f compose.yaml exec -T rabbitmq rabbitmq-diagnostics -q ping >/dev/null 2>&1 ); do \
+	( cd "$(STANDALONE_DIR)" && $(COMPOSE) up -d db cache search rabbitmq otel-collector tempo loki alloy prometheus grafana ); \
+	compose_services="$$(cd "$(STANDALONE_DIR)" && $(COMPOSE) config --services)"; \
+	if [[ "$$compose_services" == *"s3-init"* ]]; then \
+		echo "Initializing local S3 storage..."; \
+		( cd "$(STANDALONE_DIR)" && $(COMPOSE) run --rm s3-init ); \
+	fi; \
+	until ( cd "$(STANDALONE_DIR)" && $(COMPOSE) exec -T rabbitmq rabbitmq-diagnostics -q ping >/dev/null 2>&1 ); do \
 		echo "waiting for RabbitMQ..."; \
 		sleep 1; \
 	done; \
 	if ! podman image exists "$(MIGRATE_IMAGE)" >/dev/null 2>&1; then \
 		echo "missing $(MIGRATE_IMAGE), building migrate image..."; \
-		( cd "$(STANDALONE_DIR)" && $(COMPOSE) -f compose.yaml build migrate ); \
+		( cd "$(STANDALONE_DIR)" && $(COMPOSE) build migrate ); \
 	fi; \
-	( cd "$(STANDALONE_DIR)" && $(COMPOSE) -f compose.yaml run --rm migrate ); \
+	( cd "$(STANDALONE_DIR)" && $(COMPOSE) run --rm migrate ); \
 	export DATABASE_URL="postgresql://$${PGUSER}:$${PGPASSWORD}@localhost:$${LOOP_PG_PORT:-5132}/$${PGDATABASE}"; \
 	export REDIS_URL="redis://:$${LOOP_REDIS_PASSWORD}@localhost:$${LOOP_REDIS_PORT:-6319}"; \
 	export MEILISEARCH_URL="http://127.0.0.1:$${LOOP_MEILISEARCH_PORT:-7700}"; \

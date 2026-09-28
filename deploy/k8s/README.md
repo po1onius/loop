@@ -5,7 +5,7 @@
 | 目录 | 内容 |
 | --- | --- |
 | `config/` | 业务 TOML、基础设施地址和普通环境变量 |
-| `infra/` | PostgreSQL、Redis、RabbitMQ、Meilisearch、MinIO，均使用 StatefulSet 和 PVC |
+| `infra/` | PostgreSQL、Redis、RabbitMQ、Meilisearch、SeaweedFS，均使用 StatefulSet 和 PVC |
 | `bootstrap/` | 数据库初始化、媒体 bucket 初始化 Job |
 | `apps/` | API、realtime、worker 的 Deployment，以及两个 HTTP Service |
 | `observability/` | 可选的 OpenTelemetry Collector、Tempo、Loki、Alloy、Prometheus、Grafana |
@@ -26,21 +26,15 @@ docker build -f srv/loop-api-svc/Dockerfile -t "$LOOP_REGISTRY/loop-api-svc:$LOO
 docker build -f srv/loop-realtime-svc/Dockerfile -t "$LOOP_REGISTRY/loop-realtime-svc:$LOOP_IMAGE_TAG" .
 docker build -f srv/loop-worker-svc/Dockerfile -t "$LOOP_REGISTRY/loop-worker-svc:$LOOP_IMAGE_TAG" .
 docker build -f deploy/standalone/Dockerfile.migrate -t "$LOOP_REGISTRY/loop-migrate:$LOOP_IMAGE_TAG" .
-docker build -f deploy/k8s/Dockerfile.minio --target server \
-  -t "$LOOP_REGISTRY/loop-minio:RELEASE.2025-10-15T17-29-55Z" .
-docker build -f deploy/k8s/Dockerfile.minio --target client \
-  -t "$LOOP_REGISTRY/loop-minio-client:RELEASE.2025-08-13T08-35-41Z" .
 
 for name in loop-api-svc loop-realtime-svc loop-worker-svc loop-migrate; do
   docker push "$LOOP_REGISTRY/$name:$LOOP_IMAGE_TAG" || exit 1
 done
-docker push "$LOOP_REGISTRY/loop-minio:RELEASE.2025-10-15T17-29-55Z"
-docker push "$LOOP_REGISTRY/loop-minio-client:RELEASE.2025-08-13T08-35-41Z"
 ```
 
-修改 `apps/`、`infra/`、`bootstrap/` 下 `kustomization.yaml` 的 `images`，使 `newName` 和 `newTag` 与推送的镜像一致。私有仓库还需要在 `loop` 命名空间创建拉取凭证，并为相应工作负载配置 `imagePullSecrets`。
+修改 `apps/`、`bootstrap/` 下 `kustomization.yaml` 的 `images`，使 `newName` 和 `newTag` 与推送的镜像一致。私有仓库还需要在 `loop` 命名空间创建拉取凭证，并为相应工作负载配置 `imagePullSecrets`。
 
-初始化镜像包含当前 `srv/migrations/`，修改 migration 后需重新构建。MinIO 社区版已归档，最新发布要求自行构建镜像，因此提供了固定 release 的 [Dockerfile.minio](Dockerfile.minio)；后续可评估替换为其他 S3 兼容存储。[MinIO 发布说明](https://github.com/minio/minio/releases/tag/RELEASE.2025-10-15T17-29-55Z)
+初始化镜像包含当前 `srv/migrations/`，修改 migration 后需重新构建。对象存储直接使用 `docker.io/chrislusf/seaweedfs:4.47`，初始化使用 `docker.io/amazon/aws-cli:2.37.4`，无需自行构建对象存储镜像。SeaweedFS 使用 `weed mini` 在一个 Pod 内运行 master、volume、filer 和 S3，当前仅支持单机部署，不能通过增加 StatefulSet 副本数扩容为存储集群。
 
 ## 2. 准备配置和 Secret
 
@@ -59,7 +53,7 @@ openssl rsa -pubout \
 编辑 [config/runtime.env](config/runtime.env)：
 
 - 填写真实的 SMTP 发件人、用户名和域名，在 `.env` 中填写对应 token；当前邮件实现通过 SMTP relay 发送，部署清单不自建邮件服务器。
-- `LOOP_S3_ENDPOINT_URL` 是后端访问 MinIO 的集群内地址；`LOOP_S3_PRESIGN_ENDPOINT_URL` 和 `LOOP_S3_PUBLIC_BASE_URL` 是客户端访问地址。本机联调可使用默认的 `127.0.0.1:9000` 和端口转发；真机调试改为电脑局域网 IP。
+- `LOOP_S3_ENDPOINT_URL` 是后端访问 SeaweedFS 的集群内地址；`LOOP_S3_PRESIGN_ENDPOINT_URL` 和 `LOOP_S3_PUBLIC_BASE_URL` 是客户端访问地址。本机联调可使用默认的 `127.0.0.1:9000` 和端口转发；真机调试改为电脑局域网 IP。
 - `LOOP_ENV=local` 会启用现有 API 的开发 CORS，方便 Expo Web 联调。
 - 业务权限和有效期配置位于 [config/loop-api-svc.toml](config/loop-api-svc.toml)。
 
@@ -80,17 +74,17 @@ kubectl apply -k deploy/k8s/config
 
 ```bash
 kubectl apply -k deploy/k8s/infra
-for name in db cache rabbitmq search minio; do
+for name in db cache rabbitmq search seaweedfs; do
   kubectl -n loop rollout status "statefulset/$name" --timeout=300s || exit 1
 done
 
 kubectl apply -k deploy/k8s/bootstrap
-kubectl -n loop wait --for=condition=complete job/loop-migrate job/loop-minio-init --timeout=600s
+kubectl -n loop wait --for=condition=complete job/loop-migrate job/loop-s3-init --timeout=600s
 kubectl -n loop logs job/loop-migrate
-kubectl -n loop logs job/loop-minio-init
+kubectl -n loop logs job/loop-s3-init
 ```
 
-两个 Job 成功后再启动业务服务。数据库 Job 只执行现有的初始化 migration；MinIO Job 创建 `loop-dev` bucket，并按当前媒体访问方式开放该 bucket 的匿名读取，写入仍需凭证或预签名 URL。
+两个 Job 成功后再启动业务服务。数据库 Job 只执行现有的初始化 migration；SeaweedFS 启动时创建 `LOOP_S3_BUCKET` 对应的 bucket（默认 `loop-dev`）；S3 Job 使用共享的 [初始化脚本](../s3/init.sh) 配置匿名 `GetObject` 和 GET/HEAD/PUT CORS，写入仍需凭证或预签名 URL。匿名列举和删除不开放。开发 CORS 默认允许所有来源，公网部署前将 [cors.json](../s3/cors.json) 的 `AllowedOrigins` 改为实际前端域名。
 
 Kubernetes 不提供 Compose 的 `depends_on`，因此这里显式分阶段部署。初始化失败时先查看 Job 日志并修正配置，再删除对应的失败 Job、重新应用 `bootstrap/`。Job 的 Pod 模板不可原地修改；需要重新运行时同样先删除对应 Job。完成的 Job 会保留，便于查看日志。
 
@@ -112,12 +106,18 @@ API 和 realtime 使用现有 `/metrics` 路由做启动、就绪和存活探针
 ```bash
 kubectl -n loop port-forward svc/loop-api-svc 3000:3000
 kubectl -n loop port-forward svc/loop-realtime-svc 3010:3010
-kubectl -n loop port-forward svc/minio 9000:9000
+kubectl -n loop port-forward svc/seaweedfs 9000:8333
 ```
 
 客户端 API 地址为 `http://127.0.0.1:3000/loop`，实时地址为 `ws://127.0.0.1:3010/loop/realtime`。真机联调时，给端口转发增加 `--address=0.0.0.0`，客户端和 S3 外部地址均使用电脑局域网 IP，并放行对应防火墙端口。
 
 所有 Service 默认仅供集群内访问。接入域名时，根据集群现有入口配置 API、WebSocket 和 S3 路由及 TLS，保持 S3 请求的 Host 和路径不被改写，否则预签名校验会失败。
+
+## 切换到外部 S3
+
+在 `infra/kustomization.yaml` 中移除 `seaweedfs.yaml`，在 `bootstrap/kustomization.yaml` 中移除 `s3-init.yaml` 和 `../../s3`，由外部存储管理员配置 bucket、读取权限和 CORS。调整 `config/runtime.env` 的 bucket、region、公开地址与 path-style 开关；使用 AWS S3 时删除两个 endpoint 环境变量，由 SDK 选择 AWS 地址。更新 `loop-secrets` 中的 `LOOP_S3_ACCESS_KEY_ID`、`LOOP_S3_SECRET_ACCESS_KEY`，临时凭证还需 `LOOP_S3_SESSION_TOKEN`，应用配置后重启 API。业务代码无需变更。
+
+从旧 MinIO 清单升级时，Secret 的 `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` 改名为上述通用 S3 键。新 SeaweedFS 使用独立 PVC；`kubectl apply` 不会自动移除旧 MinIO StatefulSet、Service、初始化 Job 或 PVC，请在确认数据处理方案后手动停止旧服务。已有对象通过 S3 复制，不能直接复用 MinIO 数据目录。稳定媒体域名和对象路径应保持不变，避免数据库内历史公开 URL 失效。
 
 ## 5. 按需开启监控
 
@@ -175,7 +175,8 @@ done
 | Redis | [8.10.2](https://github.com/redis/redis/releases/tag/8.10.2) |
 | RabbitMQ | [4.3.6](https://www.rabbitmq.com/docs/download) |
 | Meilisearch | [1.54.0](https://github.com/meilisearch/meilisearch/releases/tag/v1.54.0) |
-| MinIO / mc | [2025-10-15](https://github.com/minio/minio/releases/tag/RELEASE.2025-10-15T17-29-55Z) / [2025-08-13](https://github.com/minio/mc/releases/tag/RELEASE.2025-08-13T08-35-41Z) |
+| SeaweedFS | [4.47](https://github.com/seaweedfs/seaweedfs/releases/tag/4.47) |
+| AWS CLI | [2.37.4](https://github.com/aws/aws-cli/blob/v2/CHANGELOG.rst) |
 | OpenTelemetry Collector | [0.161.0](https://github.com/open-telemetry/opentelemetry-collector-releases/releases/tag/v0.161.0) |
 | Tempo / Loki | [3.0.3](https://github.com/grafana/tempo/releases/tag/v3.0.3) / [3.7.8](https://github.com/grafana/loki/releases/tag/v3.7.8) |
 | Alloy / Prometheus | [1.19.2](https://github.com/grafana/alloy/releases/tag/v1.19.2) / [3.14.0](https://github.com/prometheus/prometheus/releases/tag/v3.14.0) |

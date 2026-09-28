@@ -3,11 +3,9 @@ kind: Kustomization
 namespace: loop
 resources:
   - migrate.yaml
-  - minio-init.yaml
+  - s3-init.yaml
+  - ../../s3
 images:
   - name: loop-migrate
     newName: registry.example.com/loop/loop-migrate
     newTag: dev
-  - name: loop-minio-client
-    newName: registry.example.com/loop/loop-minio-client
-    newTag: RELEASE.2025-08-13T08-35-41Z

@@ -35,7 +35,7 @@ app目录下，使用`react native` + typescript实现的客户端app
 [deploy/k8s/](deploy/k8s/README.md) 提供当前开发阶段的 Kubernetes 配置，使用 Kustomize 管理，默认部署到 `loop` 命名空间。
 
 - 业务服务：API、realtime、worker，均采用单副本部署。
-- 基础设施：PostgreSQL、Redis、RabbitMQ、Meilisearch、MinIO，使用持久卷保存数据；邮件通过配置接入 SMTP 服务。
+- 基础设施：PostgreSQL、Redis、RabbitMQ、Meilisearch、SeaweedFS，使用持久卷保存数据；邮件通过配置接入 SMTP 服务。
 - 初始化任务：执行现有数据库 migration，创建媒体 bucket 并配置读取权限。
 - 可选监控：OpenTelemetry Collector、Tempo、Loki、Alloy、Prometheus、Grafana。
 
@@ -107,7 +107,7 @@ openssl rsa -pubout \
 make backend-up
 ```
 
-`make backend-up` 会启动 Postgres、Redis、RabbitMQ、Meilisearch 和 MinIO，执行初始化 migration，并同时运行 API、realtime 与 worker。RabbitMQ AMQP 地址为 `127.0.0.1:5672`，管理界面为 `http://127.0.0.1:15672`，示例账号为 `loop` / `looprabbit123`。Meilisearch 地址为 `http://127.0.0.1:7700`。MinIO API 地址为 `http://127.0.0.1:9000`，控制台地址为 `http://127.0.0.1:9001`，示例账号为 `loopadmin` / `loopadmin123`。
+`make backend-up` 会启动 Postgres、Redis、RabbitMQ、Meilisearch 和 SeaweedFS，执行初始化 migration，并同时运行 API、realtime 与 worker。RabbitMQ AMQP 地址为 `127.0.0.1:5672`，管理界面为 `http://127.0.0.1:15672`，示例账号为 `loop` / `looprabbit123`。Meilisearch 地址为 `http://127.0.0.1:7700`。SeaweedFS S3 地址为 `http://127.0.0.1:9000`（映射容器的 `8333` 端口），示例访问密钥为 `loopadmin` / `loopadmin123`。只发布 S3 端口，关闭 Admin UI、WebDAV 和数据湖接口。
 
 如果使用 Android 真机上的 Expo Go 调试客户端，手机不能访问电脑上的 `127.0.0.1`。需要手动把本地服务地址配置成电脑局域网 IP，例如 `192.168.1.23`。
 
@@ -117,10 +117,10 @@ make backend-up
 LOOP_HTTP_ADDR='0.0.0.0:3000'
 ```
 
-MinIO 预签名上传地址也必须使用手机可访问的地址，否则插入图片会在直传对象存储时失败：
+SeaweedFS 预签名上传地址也必须使用手机可访问的地址，否则插入图片会在直传对象存储时失败：
 
 ```bash
-LOOP_S3_ENDPOINT_URL='http://<电脑局域网IP>:9000'
+LOOP_S3_PRESIGN_ENDPOINT_URL='http://<电脑局域网IP>:9000'
 LOOP_S3_PUBLIC_BASE_URL='http://<电脑局域网IP>:9000/loop-local'
 ```
 
@@ -136,7 +136,22 @@ npx expo start
 
 `make backend-up` 会同时启动 API、realtime 和 worker；任一进程退出时会结束另外两个进程并返回对应退出码，避免本地开发时异步消费静默停止。
 
-单机示例中的 RabbitMQ 与 MinIO 凭证直接使用字符串环境变量；需要按实际环境调整 `deploy/standalone/.env` 中的数据库、Redis、RabbitMQ、S3 endpoint、配置文件路径和密码。
+单机示例中的 RabbitMQ 与 SeaweedFS 凭证直接使用字符串环境变量；需要按实际环境调整 `deploy/standalone/.env` 中的数据库、Redis、RabbitMQ、S3 endpoint、配置文件路径和密码。
+
+单机默认通过 `COMPOSE_FILE='compose.yaml:compose.seaweedfs.yaml'` 加载本地对象存储。`weed mini` 使用 `loop-seaweedfs-data` 卷持久化数据并创建 bucket，`s3-init` 使用 AWS CLI 配置匿名 `GetObject` 和浏览器 GET/HEAD/PUT CORS；匿名上传、删除和列举不开放。`make backend-up` 会等待初始化成功后才启动业务进程。CORS 当前允许所有来源用于开发，部署到公网前修改 [cors.json](deploy/s3/cors.json) 中的 `AllowedOrigins` 为实际前端域名。
+
+已存在的 `deploy/standalone/.env` 不要覆盖，补充或调整下面的配置；现有 bucket 和访问密钥可以继续使用：
+
+```bash
+COMPOSE_FILE='compose.yaml:compose.seaweedfs.yaml'
+LOOP_S3_API_PORT='9000'
+LOOP_S3_INTERNAL_ENDPOINT_URL='http://seaweedfs:8333'
+LOOP_S3_ENDPOINT_URL='http://127.0.0.1:9000'
+LOOP_S3_PRESIGN_ENDPOINT_URL='http://127.0.0.1:9000'
+LOOP_S3_PUBLIC_BASE_URL='http://127.0.0.1:9000/loop-local'
+```
+
+`LOOP_S3_ENDPOINT_URL` 用于宿主机运行的后端，`LOOP_S3_INTERNAL_ENDPOINT_URL` 用于 API 容器，`LOOP_S3_PRESIGN_ENDPOINT_URL` 用于客户端直传。真机调试时将预签名地址和 `LOOP_S3_PUBLIC_BASE_URL` 改成电脑局域网 IP。旧的 `LOOP_MINIO_API_PORT`、`LOOP_MINIO_CONSOLE_PORT` 配置可以删除。若旧 MinIO 容器仍占用 9000 端口，先手动停止它；旧 MinIO 数据卷不会被读取或删除，也不能直接挂载给 SeaweedFS，有文件需要保留时应另行通过 S3 复制。
 
 `.env` 使用 shell `source` 加载，包含 `&`、空格等特殊字符的值需要加引号，例如 PostgreSQL URL。
 
@@ -161,5 +176,25 @@ cargo install diesel_cli --no-default-features --features postgres
 
 `make backend-up` 会根据 `deploy/standalone/.env` 组装 `DATABASE_URL` 并执行 migration。当前仍处于开发阶段，数据库表结构、索引和约束以这份初始化 migration 为准；初始化 migration 发生变更后需要手动重建本地开发数据库，再重新执行 `make backend-up`，避免历史 migration 引入兼容分支和冗余逻辑。
 
+### 切换到 AWS S3
+
+业务服务保持使用标准 AWS S3 SDK。目标 bucket、权限和 CORS 在云端预先配置好后，单机环境只需调整 `.env` 并重启：
+
+```bash
+COMPOSE_FILE='compose.yaml'
+LOOP_S3_BUCKET='your-bucket'
+LOOP_S3_REGION='ap-southeast-1'
+LOOP_S3_INTERNAL_ENDPOINT_URL=''
+LOOP_S3_ENDPOINT_URL=''
+LOOP_S3_PRESIGN_ENDPOINT_URL=''
+LOOP_S3_FORCE_PATH_STYLE='false'
+LOOP_S3_ACCESS_KEY_ID='your-access-key'
+LOOP_S3_SECRET_ACCESS_KEY='your-secret-key'
+# 使用临时凭证时还需设置 LOOP_S3_SESSION_TOKEN。
+LOOP_S3_PUBLIC_BASE_URL='https://media.example.com'
+```
+
+此配置不启动 SeaweedFS，也不运行本地 `s3-init`；已运行的本地 SeaweedFS 可以手动停止。清空自定义 endpoint 后由 SDK 根据 region 选择 AWS S3 地址。访问凭证当前通过环境变量注入，不支持自动使用实例角色凭证链。已有文件需复制到目标 bucket 并保留对象 key；媒体完整公开 URL 会写入数据库，建议从一开始就使用稳定的媒体域名，切换时保持 URL 路径不变。变更存储不会自动改写历史链接。
+
 ## agents
-* 暂时没有生成数据，migration归一，暂时不需要新增
+* 暂时没有产生数据，不需要新增migration
