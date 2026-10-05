@@ -18,6 +18,7 @@ use loop_dto::{
     ListEventsResp, ReviewEventJoinRequest, SearchEventsResp, UpdateEventDraftRequest,
 };
 use loop_search::EventSearchParams;
+use loop_svc_model::conversation::Conversation;
 use loop_svc_model::{
     DieselConn,
     event::{
@@ -126,6 +127,9 @@ pub async fn create_event(
             let event =
                 insert_event_with_conn(auth.user_id, "published", draft, Some(Utc::now()), conn)
                     .await?;
+            Conversation::create_for_event(&event, conn)
+                .await
+                .internal(DB_ERROR)?;
             AsyncOutbox::insert_event_search_refresh(event.event_id, crate::SERVICE_NAME, conn)
                 .await
                 .internal(DB_ERROR)?;
@@ -506,7 +510,7 @@ pub async fn join_event(
                     "joined"
                 };
                 let joined_at = (next_status == "joined").then_some(now);
-                return EventParticipation::reapply(
+                let participation = EventParticipation::reapply(
                     event_id,
                     auth.user_id,
                     next_status,
@@ -515,7 +519,13 @@ pub async fn join_event(
                     conn,
                 )
                 .await
-                .internal(DB_ERROR);
+                .internal(DB_ERROR)?;
+                if participation.status == "joined" {
+                    Conversation::join_event(event_id, auth.user_id, conn)
+                        .await
+                        .internal(DB_ERROR)?;
+                }
+                return Ok(participation);
             }
 
             let now = Utc::now();
@@ -525,7 +535,7 @@ pub async fn join_event(
                 ensure_event_capacity_available(&event, conn).await?;
                 "joined"
             };
-            EventParticipation::insert(
+            let participation = EventParticipation::insert(
                 NewEventParticipation {
                     event_id,
                     user_id: auth.user_id,
@@ -538,7 +548,13 @@ pub async fn join_event(
                 conn,
             )
             .await
-            .internal(DB_ERROR)
+            .internal(DB_ERROR)?;
+            if participation.status == "joined" {
+                Conversation::join_event(event_id, auth.user_id, conn)
+                    .await
+                    .internal(DB_ERROR)?;
+            }
+            Ok(participation)
         })
         .await?;
 
@@ -649,7 +665,7 @@ pub async fn review_event_join_request(
                 }
                 EventJoinReviewDecision::Reject => ("rejected", None),
             };
-            EventParticipation::review_pending(
+            let participation = EventParticipation::review_pending(
                 event_id,
                 applicant_id,
                 auth.user_id,
@@ -664,7 +680,13 @@ pub async fn review_event_join_request(
                     HttpErr::client(StatusCode::NOT_FOUND, EVENT_JOIN_REQUEST_NOT_FOUND)
                 }
                 err => HttpErr::internal(DB_ERROR, err),
-            })
+            })?;
+            if participation.status == "joined" {
+                Conversation::join_event(event_id, applicant_id, conn)
+                    .await
+                    .internal(DB_ERROR)?;
+            }
+            Ok(participation)
         })
         .await?;
 
@@ -822,6 +844,9 @@ async fn publish_locked_event_draft(
     let event = Event::publish_draft_with_changes(event_id, user_id, publish_changes, conn)
         .await
         .map_err(map_event_mutation_error)?;
+    Conversation::create_for_event(&event, conn)
+        .await
+        .internal(DB_ERROR)?;
     AsyncOutbox::insert_event_search_refresh(event.event_id, crate::SERVICE_NAME, conn)
         .await
         .internal(DB_ERROR)?;

@@ -41,6 +41,31 @@ struct NewAsyncOutbox {
 }
 
 impl AsyncOutbox {
+    pub async fn insert_conversation_event(
+        data: crate::messaging::conversation::ConversationEvent,
+        conn: &mut DieselConn,
+    ) -> diesel::QueryResult<Self> {
+        use crate::messaging::conversation::ConversationEvent;
+        let outbox_id = Uuid::now_v7();
+        let aggregate_id = data.conversation_id.to_string();
+        let payload = serde_json::to_value(MessageEnvelope::new(
+            outbox_id,
+            service_source("loop-api-svc"),
+            data,
+        ))
+        .map_err(|e| diesel::result::Error::SerializationError(Box::new(e)))?;
+        diesel::insert_into(async_outbox::table)
+            .values(NewAsyncOutbox {
+                outbox_id,
+                topic: ConversationEvent::ROUTING_KEY.into(),
+                aggregate_id,
+                payload,
+            })
+            .returning(Self::as_returning())
+            .get_result(conn)
+            .await
+    }
+
     #[tracing::instrument(
         name = "db.async_outbox.insert_event_search_refresh",
         skip(conn),

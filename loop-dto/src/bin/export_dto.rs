@@ -3,10 +3,10 @@ use std::{fs, io, path::PathBuf};
 use loop_dto::{
     CommunityPostReactionResp, CommunityPostResp, CommunityPostType, CommunitySectionResp,
     CompleteMediaUploadResp, ConversationCapabilitiesResp, ConversationKind,
-    ConversationMessageResp, ConversationResp, CreateCommunityPostRequest, CreateEventDraftRequest,
-    CreateEventRequest, CreateMediaUploadRequest, CreateMediaUploadResp, CurrentUserResp,
-    EventContentBlock, EventContentDoc, EventContentImage, EventFeatureBlock, EventInlineNode,
-    EventJoinRequestResp, EventJoinReviewDecision, EventParticipationResp,
+    ConversationMemberResp, ConversationMessageResp, ConversationResp, CreateCommunityPostRequest,
+    CreateEventDraftRequest, CreateEventRequest, CreateMediaUploadRequest, CreateMediaUploadResp,
+    CurrentUserResp, EventContentBlock, EventContentDoc, EventContentImage, EventFeatureBlock,
+    EventInlineNode, EventJoinRequestResp, EventJoinReviewDecision, EventParticipationResp,
     EventParticipationStateResp, EventParticipationStatus, EventResp, EventSearchFacetResp,
     EventStatus, EventTextColor, EventTextMark, ListCommunityPostsResp,
     ListConversationMessagesResp, ListConversationsResp, ListEventJoinRequestsResp, ListEventsResp,
@@ -74,6 +74,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     append::<UpdateCommunityPostRequest>(&cfg, &mut declarations)?;
     append::<CommunityPostReactionResp>(&cfg, &mut declarations)?;
     append::<ConversationCapabilitiesResp>(&cfg, &mut declarations)?;
+    append::<ConversationMemberResp>(&cfg, &mut declarations)?;
     append::<ConversationResp>(&cfg, &mut declarations)?;
     append::<ListConversationsResp>(&cfg, &mut declarations)?;
     append::<ConversationMessageResp>(&cfg, &mut declarations)?;

@@ -1,9 +1,13 @@
+import * as Crypto from "expo-crypto";
+import { useFocusEffect } from "@react-navigation/native";
+import { setActiveConversation } from "@/lib/notification-state";
 import { FlashList, type FlashListRef } from "@shopify/flash-list";
 import { Image } from "expo-image";
 import * as ImagePicker from "expo-image-picker";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   ActivityIndicator,
+  AppState,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -53,6 +57,11 @@ export function ConversationScreen({
   const isDark = useColorScheme() === "dark";
   const listRef = useRef<FlashListRef<ConversationMessageResp>>(null);
   const mountedRef = useRef(true);
+  const focusedRef = useRef(false);
+  const syncedSeqRef = useRef(0n);
+  const inFlightPoll = useRef(false);
+  const pollAgain = useRef(false);
+  const retryMessage = useRef<{ signature: string; id: string } | null>(null);
   const messagesRef = useRef<ConversationMessageResp[]>([]);
   const initialScrollDoneRef = useRef(false);
   const [messages, setMessages] = useState<ConversationMessageResp[]>([]);
@@ -63,6 +72,7 @@ export function ConversationScreen({
   const [uploadingImages, setUploadingImages] = useState(false);
   const [subscriptionBusy, setSubscriptionBusy] = useState(false);
   const [subscribed, setSubscribed] = useState(conversation.subscribed);
+  useEffect(() => setSubscribed(conversation.subscribed), [conversation.subscribed]);
   const [draft, setDraft] = useState("");
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
   const [quotedMessage, setQuotedMessage] = useState<ConversationMessageResp | null>(null);
@@ -70,7 +80,7 @@ export function ConversationScreen({
 
   const markLatestRead = useCallback((items: ConversationMessageResp[]) => {
     const last = items[items.length - 1];
-    if (!last) return;
+    if (!last || !focusedRef.current || AppState.currentState !== "active") return;
     void markConversationRead(conversation.conversation_id, last.seq).catch((markError) => {
       console.warn("[conversation-screen] read cursor update failed", {
         conversationId: conversation.conversation_id,
@@ -80,10 +90,12 @@ export function ConversationScreen({
     });
   }, [conversation.conversation_id]);
 
-  const loadRecent = useCallback(async (mode: "initial" | "poll") => {
+  const loadRecent = useCallback(async (mode: "initial" | "poll"): Promise<void> => {
+    if (mode === "poll" && inFlightPoll.current) { pollAgain.current = true; return; }
+    if (mode === "poll") inFlightPoll.current = true;
     try {
       if (mode === "poll") {
-        let afterSeq = messagesRef.current[messagesRef.current.length - 1]?.seq ?? 0n;
+        let afterSeq = syncedSeqRef.current;
         const incoming: ConversationMessageResp[] = [];
         // 每页最多 100 条，沿 next_after_seq 连续追赶到最新位置，避免长时间
         // 离线后只拿到最后一页而在本地时间线中留下不可见缺口。
@@ -98,6 +110,8 @@ export function ConversationScreen({
           afterSeq = page.next_after_seq;
         }
         if (!mountedRef.current || !incoming.length) return;
+        // Local sends can arrive before preceding remote messages. Only history responses advance this cursor.
+        syncedSeqRef.current = incoming[incoming.length - 1]?.seq ?? syncedSeqRef.current;
         const merged = mergeMessages(messagesRef.current, incoming);
         messagesRef.current = merged;
         setMessages(merged);
@@ -110,8 +124,9 @@ export function ConversationScreen({
         limit: 50,
       });
       if (!mountedRef.current) return;
-      messagesRef.current = resp.items;
-      setMessages(resp.items);
+      syncedSeqRef.current = resp.items[resp.items.length - 1]?.seq ?? 0n;
+      messagesRef.current = mergeMessages(messagesRef.current, resp.items);
+      setMessages(messagesRef.current);
       setNextBeforeSeq(resp.next_before_seq);
       markLatestRead(resp.items);
       console.info("[conversation-screen] initial messages loaded", {
@@ -129,9 +144,23 @@ export function ConversationScreen({
         reason: message,
       });
     } finally {
+      if (mode === "poll") {
+        inFlightPoll.current = false;
+        if (pollAgain.current && mountedRef.current) { pollAgain.current = false; void loadRecent("poll"); }
+      }
       if (mode === "initial" && mountedRef.current) setLoading(false);
     }
   }, [conversation.conversation_id, markLatestRead]);
+
+  useFocusEffect(useCallback(() => {
+    focusedRef.current = true;
+    setActiveConversation(conversation.conversation_id);
+    markLatestRead(messagesRef.current);
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") markLatestRead(messagesRef.current);
+    });
+    return () => { focusedRef.current = false; setActiveConversation(null); subscription.remove(); };
+  }, [conversation.conversation_id, markLatestRead]));
 
   useEffect(() => {
     mountedRef.current = true;
@@ -194,8 +223,11 @@ export function ConversationScreen({
     if ((!body && !pendingImages.length) || sending || !conversation.capabilities.can_send) return;
     setSending(true);
     setError("");
+    const signature = JSON.stringify([body, pendingImages.map((image) => image.assetId), quotedMessage?.message_id]);
+    if (retryMessage.current?.signature !== signature) retryMessage.current = { signature, id: Crypto.randomUUID() };
     try {
       const sent = await sendConversationMessage({
+        clientMessageId: retryMessage.current.id,
         conversationId: conversation.conversation_id,
         body,
         imageAssetIds: pendingImages.map((image) => image.assetId),
@@ -204,6 +236,7 @@ export function ConversationScreen({
       const merged = mergeMessages(messagesRef.current, [sent]);
       messagesRef.current = merged;
       setMessages(merged);
+      retryMessage.current = null;
       setDraft("");
       setPendingImages([]);
       setQuotedMessage(null);
@@ -297,9 +330,9 @@ export function ConversationScreen({
               <ThemedText type="defaultSemiBold" numberOfLines={1}>{conversation.title}</ThemedText>
               <ThemedText style={styles.headerMeta}>{conversation.message_count.toString()} 条消息</ThemedText>
             </View>
-            <Pressable accessibilityRole="button" disabled={subscriptionBusy} onPress={() => void toggleSubscription()} style={styles.subscribeButton}>
+            {conversation.kind === "post_thread" ? <Pressable accessibilityRole="button" disabled={subscriptionBusy} onPress={() => void toggleSubscription()} style={styles.subscribeButton}>
               {subscriptionBusy ? <ActivityIndicator size="small" color="#0A7EA4" /> : <ThemedText style={styles.subscribeText}>{subscribed ? "已加入" : "加入"}</ThemedText>}
-            </Pressable>
+            </Pressable> : null}
           </View>
 
           {headerContext}
@@ -323,7 +356,7 @@ export function ConversationScreen({
               )}
               contentContainerStyle={styles.messageList}
               ListHeaderComponent={nextBeforeSeq !== null ? <Pressable disabled={loadingOlder} onPress={() => void loadOlder()} style={styles.olderButton}>{loadingOlder ? <ActivityIndicator size="small" color="#0A7EA4" /> : <ThemedText style={styles.olderText}>加载更早消息</ThemedText>}</Pressable> : null}
-              ListEmptyComponent={<View style={styles.emptyState}><ThemedText type="defaultSemiBold">还没有人发言</ThemedText><ThemedText style={styles.muted}>发出第一条消息，开始这个讨论线程</ThemedText></View>}
+              ListEmptyComponent={<View style={styles.emptyState}><ThemedText type="defaultSemiBold">还没有人发言</ThemedText><ThemedText style={styles.muted}>发出第一条消息，开始交流</ThemedText></View>}
               onContentSizeChange={() => {
                 if (!initialScrollDoneRef.current && messages.length) {
                   initialScrollDoneRef.current = true;

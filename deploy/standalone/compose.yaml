@@ -55,6 +55,9 @@ services:
       dockerfile: srv/loop-worker-svc/Dockerfile
     image: loop-worker-svc:standalone
     environment:
+      REDIS_URL: "redis://:${LOOP_REDIS_PASSWORD:?missing LOOP_REDIS_PASSWORD}@cache:6379"
+      LOOP_FCM_PROJECT_ID: ${LOOP_FCM_PROJECT_ID:-}
+      GOOGLE_APPLICATION_CREDENTIALS: /etc/loop/firebase/service-account.json
       OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://otel-collector:4317
       DATABASE_URL: "postgresql://${PGUSER:?missing PGUSER}:${PGPASSWORD:?missing PGPASSWORD}@db:5432/${PGDATABASE:?missing PGDATABASE}"
       RABBITMQ_URL: ${LOOP_RABBITMQ_URL:?missing LOOP_RABBITMQ_URL}
@@ -62,8 +65,11 @@ services:
       MEILISEARCH_API_KEY: ${LOOP_MEILISEARCH_MASTER_KEY:?missing LOOP_MEILISEARCH_MASTER_KEY}
       LOOP_EVENT_SEARCH_INDEX_UID: ${LOOP_EVENT_SEARCH_INDEX_UID:-events_v1}
     volumes:
+      - "${LOOP_HOST_SECRETS_DIR:?missing LOOP_HOST_SECRETS_DIR}/firebase:/etc/loop/firebase:ro"
       - "${LOOP_HOST_LOG_DIR:-../../srv/log}:/app/log"
     depends_on:
+      cache:
+        condition: service_started
       db:
         condition: service_started
       rabbitmq:

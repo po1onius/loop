@@ -22,13 +22,21 @@ app目录下，使用`react native` + typescript实现的客户端app
 后端都在srv目录下，具体目录：
 
 1. loop-api-svc: 客户端主 HTTP API，承载账号、活动、媒体上传入口、报名、社区等普通请求/响应型业务
-2. loop-realtime-svc: WebSocket 长连接服务，当前承载帖子讨论消息通知，后续复用到活动群聊、在线状态等实时能力
-3. loop-worker-svc: 异步任务进程，当前负责 PostgreSQL outbox 投递、RabbitMQ 活动搜索消息消费和 Meilisearch 索引更新
+2. loop-realtime-svc: WebSocket 长连接服务，承载帖子讨论和活动群聊的用户级消息通知
+3. loop-worker-svc: 异步任务进程，负责 PostgreSQL outbox 投递、RabbitMQ 活动搜索与会话事件消费、Meilisearch 索引更新及 FCM 系统推送
 4. loop-search: API 与 worker 共用的活动搜索索引 schema、查询和写入逻辑
-5. loop-svc-model: 服务端共享模型、消息契约及数据库操作；`messaging` 模块定义消息 envelope、版本约定和强类型 payload，`outbox` 模块负责消息持久化
+5. loop-svc-model: 服务端共享模型、消息契约及数据库操作；`conversation` 模块统一帖子讨论和活动群聊，`push` 模块管理设备与投递状态；`messaging` 模块定义消息 envelope、版本约定和强类型 payload，`outbox` 模块负责消息持久化
 6. loop-infra: 数据库、Redis、RabbitMQ、Meilisearch、对象存储、邮件、可观测性等基础设施封装
 
 后端服务按运行特征拆分，而不是按页面或业务名提前拆分。当前阶段普通业务优先沉淀在 `loop-api-svc` 的内部模块中，避免社区、活动、报名、用户关系等高耦合功能过早跨服务调用。只有长连接、异步任务、媒体处理、搜索索引、通知推送等运行模型明显不同的能力，才在需要时拆成独立进程或 worker。
+
+## 活动群聊与系统推送
+
+活动正式发布时自动创建群聊，创建者和报名成功／审核通过的用户自动成为群成员。待审核用户不能访问群聊。支持文字、图片、引用回复、历史消息、未读数、成员列表和免打扰；群聊与活动绑定，暂不提供好友、私聊或独立建群。
+
+登录后的客户端使用一条 WebSocket 接收所有会话通知，HTTP 获取正文和同步已读状态。FCM 系统通知使用 React Native Firebase 原生模块，需要 Firebase 配置和原生开发包，不能使用 Expo Go。后端未设置 `LOOP_FCM_PROJECT_ID` 时只关闭系统推送，在线 IM 仍可运行。
+
+[IM 与推送配置说明](docs/im-and-push.md) 包含协议、权限配置、数据库初始化调整、Firebase／APNs 凭证、原生构建和联调流程。已有本地 API 配置需补充会话权限；本次 schema 修改后按开发约定手动重建数据库。
 
 ## k8s部署
 
@@ -99,7 +107,7 @@ make backend-run
 
 `make infra-up` 在宿主机启动 Postgres、Redis、RabbitMQ、Meilisearch 和 SeaweedFS 等容器，并完成 bucket 初始化和数据库 migration。`make backend-run` 在开发环境中运行 API、realtime 与 worker，不调用容器工具。`make backend-up` 保留为按顺序执行这两个步骤的便捷入口，需要当前环境同时具备宿主容器工具和 Cargo。RabbitMQ AMQP 地址为 `127.0.0.1:5672`，管理界面为 `http://127.0.0.1:15672`，示例账号为 `loop` / `looprabbit123`。Meilisearch 地址为 `http://127.0.0.1:7700`。SeaweedFS S3 地址为 `http://127.0.0.1:9000`（映射容器的 `8333` 端口），示例访问密钥为 `loopadmin` / `loopadmin123`。只发布 S3 端口，关闭 Admin UI、WebDAV 和数据湖接口。
 
-如果使用 Android 真机上的 Expo Go 调试客户端，手机不能访问电脑上的 `127.0.0.1`。需要手动把本地服务地址配置成电脑局域网 IP，例如 `192.168.1.23`。
+如果使用 Android 真机上的原生开发包调试客户端，手机不能访问电脑上的 `127.0.0.1`。需要手动把本地服务地址配置成电脑局域网 IP，例如 `192.168.1.23`。
 
 后端监听地址需要允许局域网访问：
 

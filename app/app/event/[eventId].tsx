@@ -1,3 +1,4 @@
+import { getEventConversation } from "@/lib/conversation-api";
 import { useLocalSearchParams, router } from "expo-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
@@ -312,6 +313,11 @@ export default function EventDetailScreen() {
               imageSources={imageSources}
             />
           </ScrollView>
+        ) : null}
+        {event && (participationState?.is_creator || participationState?.participation?.status === "joined") ? (
+          <Pressable accessibilityRole="button" style={styles.joinButton} onPress={() => {
+            void getEventConversation(event.event_id).then((group) => router.push(`/conversation/${group.conversation_id}` as never)).catch((error) => setParticipationError(error instanceof Error ? error.message : "群聊加载失败"));
+          }}><ThemedText style={styles.joinButtonText}>进入活动群聊</ThemedText></Pressable>
         ) : null}
         {event && !loadingEvent && !eventError ? (
           <EventActionBar

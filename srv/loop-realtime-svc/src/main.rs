@@ -21,7 +21,7 @@ use loop_infra::{
     config::InfraConfig,
     observability::{ObservabilityConfig, init as init_observability, metrics_handler},
 };
-use loop_svc_model::community::Conversation;
+use loop_svc_model::conversation::Conversation;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -51,17 +51,6 @@ struct AuthenticateFrame {
     #[serde(rename = "type")]
     frame_type: String,
     access_token: String,
-    conversation_id: String,
-}
-
-#[derive(Debug, Serialize)]
-struct ServerFrame<'a> {
-    #[serde(rename = "type")]
-    frame_type: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    conversation_id: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    reason: Option<&'a str>,
 }
 
 #[tokio::main]
@@ -130,109 +119,109 @@ async fn upgrade_websocket(State(state): State<AppState>, upgrade: WebSocketUpgr
 
 async fn serve_socket(mut socket: WebSocket, state: AppState) {
     let authenticated = tokio::time::timeout(AUTHENTICATION_TIMEOUT, socket.recv()).await;
-    let (claims, conversation_id) = match authenticate_first_frame(authenticated, &state).await {
-        Ok(result) => result,
+    let claims = match authenticate_first_frame(authenticated, &state).await {
+        Ok(claims) => claims,
         Err(error) => {
-            tracing::warn!(event = "realtime.authentication.failed", reason = %error, "websocket authentication failed");
-            let _ = send_json(
-                &mut socket,
-                &ServerFrame {
-                    frame_type: "error",
-                    conversation_id: None,
-                    reason: Some("unauthorized"),
-                },
-            )
-            .await;
+            tracing::warn!(event="realtime.authentication.failed", reason=%error, "websocket authentication failed");
             let _ = socket.close().await;
             return;
         }
     };
-
-    let conversation_id_text = conversation_id.to_string();
-    let channel = format!("loop:conversation:{conversation_id}");
-    let mut pubsub = match state.redis_client.get_async_pubsub().await {
-        Ok(pubsub) => pubsub,
-        Err(error) => {
-            tracing::error!(event = "realtime.redis.connect_failed", user_id = claims.user_id, error_source = ?error, "failed to open Redis Pub/Sub connection");
-            let _ = socket.close().await;
-            return;
-        }
-    };
-    if let Err(error) = pubsub.subscribe(&channel).await {
-        tracing::error!(event = "realtime.redis.subscribe_failed", user_id = claims.user_id, %channel, error_source = ?error, "failed to subscribe realtime channel");
-        let _ = socket.close().await;
-        return;
+    if let Err(error) = stream_session(&mut socket, &state, &claims).await {
+        tracing::warn!(event="realtime.session.failed", user_id=claims.user_id, error_source=?error, "realtime session ended");
     }
-    if send_json(
-        &mut socket,
-        &ServerFrame {
-            frame_type: "subscribed",
-            conversation_id: Some(&conversation_id_text),
-            reason: None,
-        },
-    )
-    .await
-    .is_err()
-    {
-        return;
-    }
-    tracing::info!(event = "realtime.connection.opened", user_id = claims.user_id, %conversation_id, "conversation websocket subscribed");
+    let _ = socket.close().await;
+    tracing::info!(
+        event = "realtime.connection.closed",
+        user_id = claims.user_id,
+        "user websocket closed"
+    );
+}
 
-    let mut redis_messages = pubsub.on_message();
+async fn stream_session(
+    socket: &mut WebSocket,
+    state: &AppState,
+    claims: &Claims,
+) -> anyhow::Result<()> {
+    let mut pubsub = state.redis_client.get_async_pubsub().await?;
+    pubsub
+        .subscribe(format!("loop:user:{}", claims.user_id))
+        .await?;
+    let (mut subscriptions, mut messages) = pubsub.split();
+    let mut watched = std::collections::HashSet::new();
+    send_json(socket, &serde_json::json!({"type":"ready"})).await?;
+    tracing::info!(
+        event = "realtime.connection.opened",
+        user_id = claims.user_id,
+        "user websocket authenticated"
+    );
     let mut heartbeat = tokio::time::interval(HEARTBEAT_INTERVAL);
     heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    // WebSocket 建立后也不能无限延长 access token 的权限。到达 JWT exp 时主动
-    // 断开，客户端会先刷新 token 再重连，从而同步最新的权限版本和账户状态。
-    let now_epoch_secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    let remaining_token_ttl = (claims.exp as u64).saturating_sub(now_epoch_secs);
-    let token_expiration = tokio::time::sleep(Duration::from_secs(remaining_token_ttl));
-    tokio::pin!(token_expiration);
+    let remaining =
+        (claims.exp as u64).saturating_sub(SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs());
+    let expiration = tokio::time::sleep(Duration::from_secs(remaining));
+    tokio::pin!(expiration);
     loop {
         tokio::select! {
-            socket_message = socket.recv() => {
-                match socket_message {
-                    Some(Ok(Message::Close(_))) | None => break,
-                    Some(Ok(Message::Ping(payload))) => {
-                        if socket.send(Message::Pong(payload)).await.is_err() { break; }
-                    }
+            frame = socket.recv() => {
+                match frame {
                     Some(Ok(Message::Text(text))) => {
-                        tracing::debug!(event = "realtime.client.frame_ignored", user_id = claims.user_id, frame_bytes = text.len(), "ignored frame after subscription");
+                        #[derive(Deserialize)]
+                        struct Subscription { #[serde(rename="type")] action: String, conversation_id: Uuid }
+                        let command = match serde_json::from_str::<Subscription>(&text) {
+                            Ok(command) => command,
+                            Err(_) => { send_json(socket, &serde_json::json!({"type":"error","reason":"invalid_frame"})).await?; continue; }
+                        };
+                        let id = command.conversation_id;
+                        if command.action == "unsubscribe" {
+                            watched.remove(&id);
+                            subscriptions.unsubscribe(format!("loop:conversation:{id}")).await?;
+                        } else if command.action == "subscribe" {
+                            let mut conn = loop_infra::db::pg_pool()?.get().await?;
+                            let allowed = match Conversation::select(id, &mut conn).await? {
+                                Some(conversation) => conversation.can_read(claims.user_id, &mut conn).await?,
+                                None => false,
+                            };
+                            if !allowed || (watched.len() >= 32 && !watched.contains(&id)) {
+                                tracing::warn!(event="realtime.subscription.denied", user_id=claims.user_id, conversation_id=%id, "conversation subscription denied");
+                                send_json(socket, &serde_json::json!({"type":"error","conversation_id":id,"reason":"forbidden"})).await?;
+                                continue;
+                            }
+                            watched.insert(id);
+                            subscriptions.subscribe(format!("loop:conversation:{id}")).await?;
+                            send_json(socket, &serde_json::json!({"type":"subscribed","conversation_id":id})).await?;
+                        }
                     }
-                    Some(Ok(_)) => {}
-                    Some(Err(error)) => {
-                        tracing::debug!(event = "realtime.socket.read_failed", user_id = claims.user_id, error_source = ?error, "websocket read failed");
-                        break;
-                    }
+                    Some(Ok(Message::Ping(payload))) => socket.send(Message::Pong(payload)).await?,
+                    Some(Ok(Message::Close(_))) | None => break,
+                    Some(Err(error)) => return Err(error.into()),
+                    _ => {}
                 }
             }
-            redis_message = redis_messages.next() => {
-                let Some(redis_message) = redis_message else { break; };
-                match redis_message.get_payload::<String>() {
-                    Ok(payload) => {
-                        if socket.send(Message::Text(payload.into())).await.is_err() { break; }
-                    }
-                    Err(error) => tracing::warn!(event = "realtime.redis.payload_invalid", user_id = claims.user_id, %conversation_id, error_source = ?error, "invalid Redis realtime payload"),
+            message = messages.next() => {
+                let Some(message) = message else { bail!("Redis subscription stream ended"); };
+                let payload: String = message.get_payload()?;
+                let event: serde_json::Value = serde_json::from_str(&payload)?;
+                // Recheck current access, including for a previously authorized connection.
+                if let Some(id) = event.get("conversation_id").and_then(|v|v.as_str()).and_then(|v|Uuid::parse_str(v).ok()) {
+                    let mut conn = loop_infra::db::pg_pool()?.get().await?;
+                    let allowed = match Conversation::select(id, &mut conn).await? {
+                        Some(c) => c.can_read(claims.user_id, &mut conn).await?, None => false,
+                    };
+                    if allowed { socket.send(Message::Text(payload.into())).await?; }
                 }
             }
-            _ = heartbeat.tick() => {
-                if socket.send(Message::Ping(Vec::new().into())).await.is_err() { break; }
-            }
-            _ = &mut token_expiration => {
-                tracing::info!(event = "realtime.access_token.expired", user_id = claims.user_id, %conversation_id, "closing websocket at access token expiration");
-                break;
-            }
+            _ = heartbeat.tick() => socket.send(Message::Ping(Vec::new().into())).await?,
+            _ = &mut expiration => break,
         }
     }
-    tracing::info!(event = "realtime.connection.closed", user_id = claims.user_id, %conversation_id, "conversation websocket closed");
+    Ok(())
 }
 
 async fn authenticate_first_frame(
     received: Result<Option<Result<Message, axum::Error>>, tokio::time::error::Elapsed>,
     state: &AppState,
-) -> anyhow::Result<(Claims, Uuid)> {
+) -> anyhow::Result<Claims> {
     let message = received
         .context("authentication frame timed out")?
         .context("websocket closed before authentication")?
@@ -252,24 +241,14 @@ async fn authenticate_first_frame(
     let claims = decode::<Claims>(&frame.access_token, &state.jwt_decoding_key, &validation)
         .context("access token rejected")?
         .claims;
-    let conversation_id =
-        Uuid::parse_str(&frame.conversation_id).context("invalid conversation id")?;
-
-    // 当前帖子讨论是 open 会话。先在服务端确认会话存在且可读，避免客户端直接
-    // 订阅任意 Redis channel。将来开放 restricted 活动群聊时在这里补成员校验。
-    let pool = loop_infra::db::pg_pool()?;
-    let mut conn = pool
-        .get()
-        .await
-        .context("failed to get database connection")?;
-    let conversation = Conversation::select(conversation_id, &mut conn)
-        .await
-        .context("failed to load conversation")?
-        .context("conversation not found")?;
-    if conversation.status == "hidden" || conversation.access_mode != "open" {
-        bail!("conversation is not readable by this realtime connection");
+    let mut conn = loop_infra::db::pg_pool()?.get().await?;
+    let user = loop_svc_model::account::User::select_by_user_id(claims.user_id, &mut conn)
+        .await?
+        .context("user not found")?;
+    if user.role != claims.role {
+        bail!("user role changed");
     }
-    Ok((claims, conversation_id))
+    Ok(claims)
 }
 
 async fn send_json<T: Serialize>(socket: &mut WebSocket, frame: &T) -> Result<(), axum::Error> {

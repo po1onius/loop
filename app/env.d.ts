@@ -6,5 +6,6 @@ declare namespace NodeJS {
      * noPropertyAccessFromIndexSignature 对其它环境变量的约束。
      */
     EXPO_PUBLIC_API_BASE_URL?: string;
+    EXPO_PUBLIC_REALTIME_URL?: string;
   }
 }

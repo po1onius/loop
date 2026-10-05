@@ -7,7 +7,7 @@ import {
 import { router, Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import * as SystemUI from "expo-system-ui";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AppState } from "react-native";
 import "react-native-reanimated";
 
@@ -18,13 +18,19 @@ import {
   hasAccessToken,
   refreshAccessTokenIfNeeded,
   subscribeAuthenticationExpired,
+  subscribeSessionState,
 } from "@/lib/api-client";
+
+import { NotificationBanner } from "@/components/notification-banner";
+import { startRealtime } from "@/lib/realtime-client";
+import { startPushNotifications } from "@/lib/push-client";
 
 export const unstable_settings = {
   anchor: "(tabs)",
 };
 
 export default function RootLayout() {
+  const [sessionReady, setSessionReady] = useState(false);
   const colorScheme = useColorScheme();
   const colorSchemeName = colorScheme === "dark" ? "dark" : "light";
   const screenBackground = Colors[colorSchemeName].background;
@@ -46,6 +52,18 @@ export default function RootLayout() {
       console.warn("[layout] system background update failed", error);
     });
   }, [screenBackground]);
+
+  useEffect(() => {
+    if (!sessionReady) return;
+    let stopRealtime: (() => void) | undefined;
+    let stopPush: (() => void) | undefined;
+    const unsubscribe = subscribeSessionState((authenticated) => {
+      stopRealtime?.(); stopPush?.();
+      stopRealtime = authenticated ? startRealtime() : undefined;
+      stopPush = authenticated ? startPushNotifications() : undefined;
+    });
+    return () => { unsubscribe(); stopRealtime?.(); stopPush?.(); };
+  }, [sessionReady]);
 
   useEffect(() => {
     let active = true;
@@ -79,6 +97,7 @@ export default function RootLayout() {
     );
 
     void restoreAuthSession().then((restored) => {
+      if (active) setSessionReady(true);
       if (!active || !restored) {
         return;
       }
@@ -121,6 +140,7 @@ export default function RootLayout() {
           options={{ presentation: "modal", title: "Modal" }}
         />
       </Stack>
+      <NotificationBanner />
       <StatusBar style="auto" />
     </ThemeProvider>
   );

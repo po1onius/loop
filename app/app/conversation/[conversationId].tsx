@@ -8,6 +8,8 @@ import { ThemedText } from "@/components/themed-text";
 import { ThemedView } from "@/components/themed-view";
 import { getCurrentUser } from "@/lib/auth-api";
 import { getCommunityPost } from "@/lib/community-api";
+import { subscribeRealtimeEvents } from "@/lib/realtime-client";
+import { GroupContext } from "@/components/conversation/group-context";
 import { getConversation } from "@/lib/conversation-api";
 import type { CommunityPostResp, ConversationResp } from "@/lib/dto";
 
@@ -25,6 +27,7 @@ export default function ConversationRoute() {
       return;
     }
     let active = true;
+    setConversation(null); setPost(null); setError("");
     void Promise.all([getConversation(conversationId), getCurrentUser()])
       .then(async ([nextConversation, user]) => {
         const nextPost = nextConversation.kind === "post_thread"
@@ -51,6 +54,20 @@ export default function ConversationRoute() {
     };
   }, [conversationId]);
 
+  useEffect(() => {
+    if (!conversationId) return;
+    let active = true;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const unsubscribe = subscribeRealtimeEvents((event) => {
+      if (event.conversation_id && event.conversation_id !== conversationId) return;
+      if (!timer) timer = setTimeout(() => {
+        timer = null;
+        void getConversation(conversationId).then((next) => { if (active) setConversation(next); }).catch(() => console.warn("[conversation-route] conversation refresh failed"));
+      }, 150);
+    });
+    return () => { active = false; unsubscribe(); if (timer) clearTimeout(timer); };
+  }, [conversationId]);
+
   if (!conversation || !currentUserId) {
     return (
       <SafeAreaView style={styles.safeArea}>
@@ -70,11 +87,12 @@ export default function ConversationRoute() {
 
   return (
     <ConversationScreen
+      key={conversation.conversation_id}
       conversation={conversation}
       currentUserId={currentUserId}
       onBack={() => router.back()}
       onConversationChange={setConversation}
-      headerContext={post ? <PostThreadContext post={post} /> : undefined}
+      headerContext={post ? <PostThreadContext post={post} /> : conversation.kind === "event_group" ? <GroupContext conversation={conversation} onChange={setConversation} /> : undefined}
     />
   );
 }

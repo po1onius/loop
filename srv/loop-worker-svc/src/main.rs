@@ -1,3 +1,5 @@
+mod conversation;
+mod push;
 use anyhow::{Context, bail};
 use chrono::{Duration as ChronoDuration, Utc};
 use diesel_async::AsyncConnection;
@@ -78,6 +80,9 @@ async fn run() -> anyhow::Result<()> {
 
     let connection = loop_infra::rabbitmq::connect(SERVICE_NAME).await?;
     let topology = declare_topology(&connection).await?;
+    let realtime_channel = conversation::declare(&connection, false).await?;
+    let push_channel = conversation::declare(&connection, true).await?;
+    let fcm = push::Fcm::from_env()?;
     tracing::info!(
         event = "worker.start",
         service_name = SERVICE_NAME,
@@ -86,12 +91,15 @@ async fn run() -> anyhow::Result<()> {
         "worker started"
     );
 
-    // 三个长期任务任意一个异常退出都终止进程，让 K8s/Compose 按统一方式重启，
+    // 任意长期任务异常退出都终止进程，让 K8s/Compose 按统一方式重启，
     // 避免 worker 表面存活但已经停止投递或消费。
     tokio::try_join!(
         run_outbox_relay(topology.publisher),
         run_event_search_consumer(topology.consumer, search),
         run_outbox_cleanup(),
+        conversation::consume(realtime_channel, false),
+        conversation::consume(push_channel, true),
+        push::run(fcm),
     )?;
     Ok(())
 }
@@ -483,8 +491,12 @@ async fn run_outbox_cleanup() -> anyhow::Result<()> {
         let deleted = AsyncOutbox::delete_published_before(published_before, &mut conn)
             .await
             .context("failed to clean published outbox rows")?;
+        let push_deleted = loop_svc_model::push::cleanup(&mut conn)
+            .await
+            .context("failed to clean old push delivery records")?;
         tracing::info!(
             event = "worker.outbox.cleanup_completed",
+            push_deleted,
             deleted_count = deleted,
             retention_days = OUTBOX_RETENTION_DAYS,
             "published outbox cleanup completed"

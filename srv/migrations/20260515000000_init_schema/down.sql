@@ -1,3 +1,5 @@
+DROP TABLE IF EXISTS push_deliveries;
+DROP TABLE IF EXISTS push_devices;
 DROP TABLE content_reports;
 DROP TABLE community_post_event_links;
 DROP TABLE community_post_reactions;

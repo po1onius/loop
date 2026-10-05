@@ -35,3 +35,7 @@ deploy/**/secrets/*
 .idea/
 *.swp
 *.swo
+
+# Per-project Firebase native configuration and server credential exports
+app/google-services.json
+app/GoogleService-Info.plist

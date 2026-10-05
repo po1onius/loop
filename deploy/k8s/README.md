@@ -181,3 +181,7 @@ done
 | Tempo / Loki | [3.0.3](https://github.com/grafana/tempo/releases/tag/v3.0.3) / [3.7.8](https://github.com/grafana/loki/releases/tag/v3.7.8) |
 | Alloy / Prometheus | [1.19.2](https://github.com/grafana/alloy/releases/tag/v1.19.2) / [3.14.0](https://github.com/prometheus/prometheus/releases/tag/v3.14.0) |
 | Grafana | [13.2.2](https://grafana.com/grafana/download?edition=oss) |
+
+## 活动群聊与 FCM
+
+worker 现需 Redis，并可从 `loop-firebase` Secret 挂载 FCM 服务账号。配置步骤见 [IM 与系统推送](../../docs/im-and-push.md)。更新后的会话权限已包含在 API 配置中；应用和初始化 schema 需同步更新。

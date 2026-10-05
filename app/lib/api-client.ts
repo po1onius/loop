@@ -62,16 +62,25 @@ type AuthenticationExpirationListener = (
 const authenticationExpirationListeners =
   new Set<AuthenticationExpirationListener>();
 
+const sessionListeners = new Set<(authenticated: boolean) => void>();
+export function subscribeSessionState(listener: (authenticated: boolean) => void): () => void {
+  sessionListeners.add(listener);
+  listener(Boolean(accessToken));
+  return () => { sessionListeners.delete(listener); };
+}
+
 export function setAccessToken(
   token: string | null,
   expiresInSeconds?: number | string | bigint,
 ) {
+  const wasAuthenticated = Boolean(accessToken);
   clearAccessTokenExpirationTimer();
   accessToken = null;
   accessTokenExpiresAtMs = null;
   accessTokenRefreshAtMs = null;
 
   if (!token) {
+    if (wasAuthenticated) for (const listener of sessionListeners) listener(false);
     console.info("[api-client] access token cleared");
     return;
   }
@@ -92,6 +101,7 @@ export function setAccessToken(
     refreshAt: new Date(accessTokenRefreshAtMs).toISOString(),
   });
   scheduleAccessTokenExpiration();
+  if (!wasAuthenticated) for (const listener of sessionListeners) listener(true);
 }
 
 export function hasAccessToken(): boolean {
@@ -196,6 +206,7 @@ async function refreshAccessToken(
 }
 
 function invalidateAuthentication(reason: AuthenticationExpirationReason): void {
+  for (const listener of sessionListeners) listener(false);
   clearAccessTokenExpirationTimer();
   accessToken = null;
   accessTokenExpiresAtMs = null;

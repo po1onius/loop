@@ -1,133 +1,116 @@
+import { AppState } from "react-native";
 import { getRealtimeAccessToken } from "@/lib/api-client";
 
-const REALTIME_URL = normalizeRealtimeUrl(
-  process.env["EXPO_PUBLIC_REALTIME_URL"],
-);
-const INITIAL_RECONNECT_DELAY_MS = 1_000;
-const MAX_RECONNECT_DELAY_MS = 15_000;
-
+const REALTIME_URL = process.env.EXPO_PUBLIC_REALTIME_URL?.trim();
 export type ConversationRealtimeEvent = {
-  type: "conversation.message_created";
-  conversation_id: string;
-  seq: string | number;
-  message_id: string;
+  type: "conversation.message_created" | "conversation.changed" | "sync";
+  conversation_id?: string;
+  seq?: string | number;
+  message_id?: string;
 };
+type Listener = (event: ConversationRealtimeEvent) => void;
+const listeners = new Set<Listener>();
+const watched = new Map<string, number>();
+let socket: WebSocket | null = null;
+let authenticated = false;
 
-/**
- * 每个打开的会话维持一条 WebSocket。服务端事件只作为“有新序号”的通知，
- * 消息正文仍从 HTTP API 回补，因此 Redis Pub/Sub 的 at-most-once 语义不会
- * 造成永久丢消息，重连后定时对账也能补齐断线窗口。
- */
-export function subscribeConversationRealtime(
-  conversationId: string,
-  onEvent: (event: ConversationRealtimeEvent) => void,
-): { configured: boolean; close: () => void } {
-  if (!REALTIME_URL) {
-    console.info("[realtime-client] realtime URL is not configured; using HTTP polling", {
-      conversationId,
-    });
-    return { configured: false, close: () => undefined };
+export function emitConversationEvent(event: ConversationRealtimeEvent) {
+  for (const listener of listeners) listener(event);
+}
+export function subscribeRealtimeEvents(listener: Listener): () => void {
+  listeners.add(listener);
+  return () => { listeners.delete(listener); };
+}
+function send(type: string, conversationId: string) {
+  if (authenticated && socket?.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify({ type, conversation_id: conversationId }));
   }
+}
 
+/** One connection per signed-in app; screens only manage their subscriptions. */
+export function startRealtime(): () => void {
+  if (!REALTIME_URL) {
+    console.info("[realtime] EXPO_PUBLIC_REALTIME_URL missing; periodic HTTP sync remains active");
+    return () => undefined;
+  }
   let disposed = false;
-  let socket: WebSocket | null = null;
-  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  let reconnectDelay = INITIAL_RECONNECT_DELAY_MS;
-
-  const scheduleReconnect = () => {
-    if (disposed || reconnectTimer) return;
-    reconnectTimer = setTimeout(() => {
-      reconnectTimer = null;
-      void connect();
-    }, reconnectDelay);
-    reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY_MS);
+  let connecting = false;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let delay = 1000;
+  const schedule = () => {
+    if (disposed || timer || AppState.currentState === "background") return;
+    timer = setTimeout(() => { timer = null; void connect(); }, delay);
+    delay = Math.min(delay * 2, 15000);
   };
-
   const connect = async () => {
-    if (disposed) return;
+    if (disposed || connecting || socket) return;
+    connecting = true;
     try {
       const token = await getRealtimeAccessToken();
       if (disposed) return;
-      const nextSocket = new WebSocket(REALTIME_URL);
-      socket = nextSocket;
-      nextSocket.onopen = () => {
-        reconnectDelay = INITIAL_RECONNECT_DELAY_MS;
-        nextSocket.send(JSON.stringify({
-          type: "authenticate",
-          access_token: token,
-          conversation_id: conversationId,
-        }));
-        console.info("[realtime-client] websocket opened; authentication sent", { conversationId });
-      };
-      nextSocket.onmessage = (message) => {
-        if (typeof message.data !== "string") return;
+      const next = new WebSocket(REALTIME_URL);
+      socket = next;
+      next.onopen = () => next.send(JSON.stringify({ type: "authenticate", access_token: token }));
+      next.onmessage = ({ data }) => {
+        if (disposed || socket !== next || typeof data !== "string") return;
         try {
-          const frame = JSON.parse(message.data) as Record<string, unknown>;
-          if (frame["type"] === "subscribed") {
-            console.info("[realtime-client] conversation subscribed", { conversationId });
-            return;
+          const event = JSON.parse(data);
+          if (event.type === "ready") {
+            authenticated = true;
+            delay = 1000;
+            for (const id of watched.keys()) send("subscribe", id);
+            emitConversationEvent({ type: "sync" });
+            console.info("[realtime] user connection ready");
+          } else if (event.type === "subscribed") {
+            emitConversationEvent({ type: "sync", conversation_id: event.conversation_id });
+          } else if (["conversation.message_created", "conversation.changed"].includes(event.type) && typeof event.conversation_id === "string") {
+            emitConversationEvent(event);
+          } else if (event.type === "error") {
+            console.warn("[realtime] subscription rejected", { reason: event.reason, conversationId: event.conversation_id });
           }
-          if (
-            frame["type"] === "conversation.message_created" &&
-            frame["conversation_id"] === conversationId &&
-            typeof frame["message_id"] === "string"
-          ) {
-            onEvent(frame as ConversationRealtimeEvent);
-          }
-        } catch (error) {
-          console.warn("[realtime-client] invalid server frame ignored", {
-            conversationId,
-            reason: error instanceof Error ? error.message : String(error),
-          });
-        }
+        } catch { console.warn("[realtime] invalid server frame"); }
       };
-      nextSocket.onerror = () => {
-        console.warn("[realtime-client] websocket transport error", { conversationId });
-      };
-      nextSocket.onclose = (event) => {
-        if (socket === nextSocket) socket = null;
-        console.info("[realtime-client] websocket closed", {
-          conversationId,
-          code: event.code,
-          reason: event.reason,
-          disposed,
-        });
-        scheduleReconnect();
+      next.onerror = () => console.warn("[realtime] transport error");
+      next.onclose = () => {
+        if (socket === next) { socket = null; authenticated = false; }
+        schedule();
       };
     } catch (error) {
-      console.warn("[realtime-client] websocket connection preparation failed", {
-        conversationId,
-        reason: error instanceof Error ? error.message : String(error),
-      });
-      scheduleReconnect();
-    }
+      console.warn("[realtime] connection failed", { reason: error instanceof Error ? error.message : String(error) });
+      schedule();
+    } finally { connecting = false; }
   };
-
+  const appState = AppState.addEventListener("change", (state) => {
+    if (state === "active") {
+      emitConversationEvent({ type: "sync" });
+      // The OS may have suspended a socket without delivering its close callback.
+      if (socket) { const old = socket; socket = null; authenticated = false; old.close(); }
+      void connect();
+    }
+  });
   void connect();
-  return {
-    configured: true,
-    close: () => {
-      disposed = true;
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-      reconnectTimer = null;
-      socket?.close(1000, "conversation screen closed");
-      socket = null;
-    },
+  return () => {
+    disposed = true;
+    appState.remove();
+    if (timer) clearTimeout(timer);
+    const old = socket; socket = null; authenticated = false;
+    old?.close(1000, "session ended");
   };
 }
 
-function normalizeRealtimeUrl(value: string | undefined): string | null {
-  const normalized = value?.trim();
-  if (!normalized) return null;
-  try {
-    const url = new URL(normalized);
-    if (url.protocol !== "ws:" && url.protocol !== "wss:") {
-      console.warn("[realtime-client] realtime URL must use ws:// or wss://");
-      return null;
-    }
-    return url.toString();
-  } catch {
-    console.warn("[realtime-client] realtime URL is invalid");
-    return null;
-  }
+export function subscribeConversationRealtime(conversationId: string, onEvent: Listener) {
+  watched.set(conversationId, (watched.get(conversationId) ?? 0) + 1);
+  send("subscribe", conversationId);
+  const unsubscribe = subscribeRealtimeEvents((event) => {
+    if (!event.conversation_id || event.conversation_id === conversationId) onEvent(event);
+  });
+  return {
+    configured: Boolean(REALTIME_URL),
+    close: () => {
+      unsubscribe();
+      const count = (watched.get(conversationId) ?? 1) - 1;
+      if (count > 0) watched.set(conversationId, count);
+      else { watched.delete(conversationId); send("unsubscribe", conversationId); }
+    },
+  };
 }

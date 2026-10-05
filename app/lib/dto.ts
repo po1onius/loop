@@ -92,7 +92,9 @@ export type CommunityPostReactionResp = { interested: boolean, interest_count: b
 
 export type ConversationCapabilitiesResp = { can_read: boolean, can_send: boolean, can_upload: boolean, can_quote: boolean, can_manage: boolean, read_only_reason: string | null, };
 
-export type ConversationResp = { conversation_id: string, kind: ConversationKind, subject_id: string, title: string, status: string, last_seq: bigint, message_count: bigint, last_message_preview: string | null, last_message_at: string | null, last_read_seq: bigint, unread_count: bigint, subscribed: boolean, capabilities: ConversationCapabilitiesResp, };
+export type ConversationMemberResp = { user_id: string, username: string, avatar_asset_id: string | null, is_owner: boolean, };
+
+export type ConversationResp = { conversation_id: string, kind: ConversationKind, subject_id: string, title: string, status: string, last_seq: bigint, message_count: bigint, last_message_preview: string | null, last_message_at: string | null, last_read_seq: bigint, unread_count: bigint, subscribed: boolean, muted: boolean, capabilities: ConversationCapabilitiesResp, };
 
 export type ListConversationsResp = { items: Array<ConversationResp>, };
 

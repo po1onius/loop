@@ -1,3 +1,4 @@
+import { unregisterPushDevice } from "@/lib/push-client";
 import type {
   CurrentUserResp,
   LoginRequest,
@@ -47,6 +48,7 @@ function normalizeLoginResp(resp: LoginResp): LoginResp {
 }
 
 export async function login(params: LoginRequest): Promise<LoginResp> {
+  if (hasAccessToken()) { await unregisterPushDevice(); setAccessToken(null); }
   const resp = await requestJson<LoginRequest, LoginResp>("/user/login", {
     method: "POST",
     body: params,
@@ -75,6 +77,7 @@ export async function refreshToken(
 }
 
 export async function logout(): Promise<void> {
+  await unregisterPushDevice();
   const session = await ensureRefreshSessionLoaded();
 
   // 先使当前代次失效并清除内存 token，保证点击注销后不会再发出新的鉴权请求；

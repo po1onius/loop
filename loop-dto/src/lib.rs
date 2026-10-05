@@ -507,6 +507,7 @@ pub struct ConversationResp {
     pub last_read_seq: i64,
     pub unread_count: i64,
     pub subscribed: bool,
+    pub muted: bool,
     pub capabilities: ConversationCapabilitiesResp,
 }
 
@@ -563,4 +564,13 @@ pub struct MarkConversationReadRequest {
 pub struct SetConversationSubscriptionRequest {
     pub subscribed: bool,
     pub muted: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export_to = "dto.ts")]
+pub struct ConversationMemberResp {
+    pub user_id: String,
+    pub username: String,
+    pub avatar_asset_id: Option<String>,
+    pub is_owner: bool,
 }

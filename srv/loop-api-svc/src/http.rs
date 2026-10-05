@@ -3,7 +3,7 @@ pub mod middleware;
 mod util;
 
 use crate::http::{
-    api::{community, event, media, user},
+    api::{community, conversation, event, media, push, user},
     middleware::{ApiRule, RouteAccess},
 };
 use axum::{Router, routing::MethodRouter};
@@ -170,6 +170,8 @@ pub fn route(state: AppState) -> AppRoutes {
         AppRoutes::empty()
             .merge(user::route(state.clone()))
             .merge(community::route(state.clone()))
+            .merge(conversation::route(state.clone()))
+            .merge(push::route(state.clone()))
             .merge(event::route(state.clone()))
             .merge(media::route(state)),
     )

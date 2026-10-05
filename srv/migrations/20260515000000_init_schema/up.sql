@@ -385,3 +385,26 @@ CREATE TABLE content_reports (
 
 CREATE INDEX idx_content_reports_status_created
 ON content_reports(status, created_at ASC);
+
+-- Device bindings and per-message delivery state; no foreign keys by project policy.
+CREATE TABLE push_devices (
+    installation_id UUID PRIMARY KEY,
+    registration_id UUID NOT NULL UNIQUE,
+    user_id BIGINT NOT NULL,
+    platform TEXT NOT NULL CHECK (platform IN ('android', 'ios')),
+    token TEXT NOT NULL UNIQUE CHECK (length(token) BETWEEN 1 AND 4096),
+    enabled BOOLEAN NOT NULL DEFAULT true,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_push_devices_user ON push_devices(user_id) WHERE enabled;
+CREATE TABLE push_deliveries (
+    message_id UUID NOT NULL,
+    registration_id UUID NOT NULL,
+    user_id BIGINT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'sent', 'skipped', 'failed')),
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (message_id, registration_id)
+);
+CREATE INDEX idx_push_deliveries_pending ON push_deliveries(next_attempt_at) WHERE status = 'pending';

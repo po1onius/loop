@@ -9,6 +9,7 @@ import { formatRelativeTime } from "@/components/community-post-card";
 import { ThemedText } from "@/components/themed-text";
 import { ThemedView } from "@/components/themed-view";
 import { useColorScheme } from "@/hooks/use-color-scheme";
+import { subscribeRealtimeEvents } from "@/lib/realtime-client";
 import { listConversations } from "@/lib/conversation-api";
 import type { ConversationResp } from "@/lib/dto";
 
@@ -20,11 +21,11 @@ export default function ChatScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
 
-  const load = useCallback(async (refresh = false) => {
+  const load = useCallback(async (refresh = false, silent = false) => {
     const requestId = ++requestIdRef.current;
     if (refresh) {
       setRefreshing(true);
-    } else {
+    } else if (!silent) {
       setLoading(true);
     }
     setError("");
@@ -48,7 +49,13 @@ export default function ChatScreen() {
 
   useFocusEffect(useCallback(() => {
     void load(false);
+    let pending: ReturnType<typeof setTimeout> | null = null;
+    const unsubscribe = subscribeRealtimeEvents(() => {
+      if (!pending) pending = setTimeout(() => { pending = null; void load(false, true); }, 150);
+    });
+    const timer = setInterval(() => void load(false, true), 30000);
     return () => {
+      unsubscribe(); clearInterval(timer); if (pending) clearTimeout(pending);
       requestIdRef.current += 1;
     };
   }, [load]));
@@ -58,7 +65,7 @@ export default function ChatScreen() {
       <ThemedView style={styles.container}>
         <View style={styles.header}>
           <ThemedText type="title">聊天</ThemedText>
-          <ThemedText style={styles.description}>帖子讨论和后续活动群聊都会集中显示在这里。</ThemedText>
+          <ThemedText style={styles.description}>活动群聊和帖子讨论</ThemedText>
         </View>
         {error ? <Pressable onPress={() => void load(false)} style={styles.errorCard}><ThemedText style={styles.errorText}>{error}，点击重试</ThemedText></Pressable> : null}
         {loading && !conversations.length ? <View style={styles.center}><ActivityIndicator color="#0A7EA4" /><ThemedText style={styles.muted}>正在加载会话...</ThemedText></View> : (
@@ -84,7 +91,7 @@ export default function ChatScreen() {
             )}
             contentContainerStyle={styles.listContent}
             refreshControl={<RefreshControl refreshing={refreshing} tintColor="#0A7EA4" onRefresh={() => void load(true)} />}
-            ListEmptyComponent={<View style={styles.center}><ThemedText type="defaultSemiBold">暂无会话</ThemedText><ThemedText style={styles.muted}>发布帖子或参与讨论后，会话会出现在这里</ThemedText><Pressable onPress={() => router.push("/(tabs)/community" as never)} style={styles.communityButton}><ThemedText style={styles.communityButtonText}>去社区看看</ThemedText></Pressable></View>}
+            ListEmptyComponent={<View style={styles.center}><ThemedText type="defaultSemiBold">暂无会话</ThemedText><ThemedText style={styles.muted}>创建或加入活动后，群聊自动出现在这里，也可参与帖子讨论</ThemedText><Pressable onPress={() => router.push("/(tabs)/community" as never)} style={styles.communityButton}><ThemedText style={styles.communityButtonText}>去社区看看</ThemedText></Pressable></View>}
           />
         )}
       </ThemedView>

@@ -132,3 +132,10 @@ function normalizeMessage(
 }
 
 export type { ConversationMessageResp, ConversationResp };
+
+export async function getEventConversation(eventId: string): Promise<ConversationResp> {
+  return normalizeConversation(await requestJson<undefined, ConversationResp>(`/events/${encodeURIComponent(eventId)}/conversation`, { auth: true }));
+}
+export function listConversationMembers(conversationId: string) {
+  return requestJson<undefined, import("@/lib/dto").ConversationMemberResp[]>(`/conversations/${encodeURIComponent(conversationId)}/members`, { auth: true });
+}

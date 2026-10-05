@@ -9,10 +9,15 @@ chrono = { workspace = true }
 diesel-async = { workspace = true }
 futures-util = { workspace = true }
 lapin = { workspace = true }
-loop-infra = { workspace = true, features = ["db", "observability", "rabbitmq", "search"] }
+loop-infra = { workspace = true, features = ["db", "observability", "rabbitmq", "search", "redis"] }
 loop-search = { workspace = true }
 loop-svc-model = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
+
+redis = { workspace = true }
+reqwest = { version = "0.13", features = ["json"] }
+google-cloud-auth = "1.17"
+diesel = { workspace = true }

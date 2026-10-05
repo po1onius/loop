@@ -26,6 +26,13 @@ spec:
             - configMapRef:
                 name: loop-env
           env:
+            - name: GOOGLE_APPLICATION_CREDENTIALS
+              value: /etc/loop/firebase/service-account.json
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: loop-secrets
+                  key: REDIS_URL
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
@@ -53,6 +60,9 @@ spec:
               drop:
                 - ALL
           volumeMounts:
+            - name: firebase
+              mountPath: /etc/loop/firebase
+              readOnly: true
             - name: logs
               mountPath: /app/log
       securityContext:
@@ -61,6 +71,10 @@ spec:
         runAsGroup: 10001
         fsGroup: 10001
       volumes:
+        - name: firebase
+          secret:
+            secretName: loop-firebase
+            optional: true
         - name: logs
           emptyDir:
             sizeLimit: 1Gi
