@@ -107,12 +107,31 @@ CREATE TABLE events (
     end_at TIMESTAMPTZ,
     location_name TEXT,
     location_address TEXT,
+    location_latitude DOUBLE PRECISION,
+    location_longitude DOUBLE PRECISION,
+    location_provider TEXT,
+    location_coordinate_system TEXT,
+    location_poi_id TEXT,
+    location_note TEXT,
     capacity INTEGER,
     requires_approval BOOLEAN NOT NULL DEFAULT FALSE,
     tags TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     published_at TIMESTAMPTZ,
+    CONSTRAINT events_location_complete CHECK (
+        (location_latitude IS NULL AND location_longitude IS NULL
+         AND location_name IS NULL AND location_address IS NULL
+         AND location_provider IS NULL AND location_coordinate_system IS NULL
+         AND location_poi_id IS NULL AND location_note IS NULL)
+        OR
+        (location_latitude IS NOT NULL AND location_longitude IS NOT NULL
+         AND location_latitude BETWEEN -90 AND 90 AND location_longitude BETWEEN -180 AND 180
+         AND location_name IS NOT NULL AND length(btrim(location_name)) > 0
+         AND location_address IS NOT NULL AND length(btrim(location_address)) > 0
+         AND location_provider IS NOT NULL AND location_provider = 'amap'
+         AND location_coordinate_system IS NOT NULL AND location_coordinate_system = 'GCJ-02')
+    ),
     CONSTRAINT events_title_required_when_not_draft CHECK (status = 'draft' OR length(btrim(title)) > 0),
     CONSTRAINT events_title_len CHECK (char_length(title) <= 80),
     CONSTRAINT events_status_allowed CHECK (status IN ('draft', 'published', 'cancelled')),

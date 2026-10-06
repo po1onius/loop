@@ -21,6 +21,8 @@ import DateTimePicker, {
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import WebView, { type WebViewMessageEvent } from "react-native-webview";
 
+import { EventLocationPicker } from "@/components/event-location-picker";
+import { eventLocationFields, locationFromEvent, type MapLocation } from "@/lib/event-location";
 import { ThemedText } from "@/components/themed-text";
 import { ThemedView } from "@/components/themed-view";
 import { IconSymbol } from "@/components/ui/icon-symbol";
@@ -138,8 +140,9 @@ export default function CreateEventScreen() {
   const [draftDateTime, setDraftDateTime] = useState(() =>
     createDefaultEventDate(),
   );
-  const [locationName, setLocationName] = useState("");
-  const [locationAddress, setLocationAddress] = useState("");
+  const [selectedLocation, setSelectedLocation] = useState<MapLocation | null>(null);
+  const [locationNote, setLocationNote] = useState("");
+  const [locationPickerOpen, setLocationPickerOpen] = useState(false);
   const [capacityText, setCapacityText] = useState("");
   const [requiresApproval, setRequiresApproval] = useState(false);
   const [tagText, setTagText] = useState("");
@@ -229,8 +232,9 @@ export default function CreateEventScreen() {
       setTitle(event?.title ?? "");
       setStartAt(dateFromRfc3339(event?.start_at ?? null));
       setEndAt(dateFromRfc3339(event?.end_at ?? null));
-      setLocationName(event?.location_name ?? "");
-      setLocationAddress(event?.location_address ?? "");
+      setSelectedLocation(event ? locationFromEvent(event) : null);
+      setLocationNote(event?.location_note ?? "");
+      setLocationPickerOpen(false);
       setCapacityText(
         event?.capacity !== null && event?.capacity !== undefined
           ? String(event.capacity)
@@ -603,8 +607,8 @@ export default function CreateEventScreen() {
         doc: normalizedDoc,
         startAt,
         endAt,
-        locationName,
-        locationAddress,
+        selectedLocation,
+        locationNote,
         capacityText,
         requiresApproval,
         tagText,
@@ -651,8 +655,8 @@ export default function CreateEventScreen() {
       capacityText,
       endAt,
       endDraftWork,
-      locationAddress,
-      locationName,
+      locationNote,
+      selectedLocation,
       requiresApproval,
       startAt,
       tagText,
@@ -669,8 +673,8 @@ export default function CreateEventScreen() {
           doc: normalizedDoc,
           startAt,
           endAt,
-          locationName,
-          locationAddress,
+          selectedLocation,
+          locationNote,
           capacityText,
           requiresApproval,
           tagText,
@@ -709,8 +713,8 @@ export default function CreateEventScreen() {
     [
       capacityText,
       endAt,
-      locationAddress,
-      locationName,
+      locationNote,
+      selectedLocation,
       requiresApproval,
       saveDraft,
       startAt,
@@ -1189,14 +1193,14 @@ export default function CreateEventScreen() {
                 />
               </View>
               <View style={styles.row}>
-                <TextInput
+                <Pressable
+                  accessibilityRole="button"
                   style={[styles.input, styles.rowInput]}
-                  placeholder="地点名称"
-                  placeholderTextColor="#8A94A6"
-                  value={locationName}
-                  editable={draftOpened}
-                  onChangeText={setLocationName}
-                />
+                  disabled={busy || !draftOpened}
+                  onPress={() => { Keyboard.dismiss(); setLocationPickerOpen(true); }}
+                >
+                  <ThemedText style={{ color: "#11181C" }}>{selectedLocation?.name ?? "选择活动地点"}</ThemedText>
+                </Pressable>
                 <TextInput
                   style={[styles.input, styles.rowInput]}
                   placeholder="人数上限"
@@ -1207,14 +1211,25 @@ export default function CreateEventScreen() {
                   onChangeText={setCapacityText}
                 />
               </View>
-              <TextInput
-                style={styles.input}
-                placeholder="详细地址"
-                placeholderTextColor="#8A94A6"
-                value={locationAddress}
-                editable={draftOpened}
-                onChangeText={setLocationAddress}
-              />
+              {selectedLocation ? (
+                <View style={{ gap: 8 }}>
+                  <ThemedText>{selectedLocation.address}</ThemedText>
+                  <Pressable accessibilityRole="button" disabled={busy} onPress={() => {
+                    setSelectedLocation(null);
+                    setLocationNote("");
+                    console.info("[create-event] location cleared");
+                  }}><ThemedText style={{ color: "#64748b" }}>清除地点</ThemedText></Pressable>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="补充说明：楼层、房间号或集合入口（选填）"
+                    placeholderTextColor="#8A94A6"
+                    value={locationNote}
+                    maxLength={200}
+                    editable={!busy}
+                    onChangeText={setLocationNote}
+                  />
+                </View>
+              ) : null}
               <TextInput
                 style={styles.input}
                 placeholder="标签，用空格或逗号分隔"
@@ -1309,6 +1324,15 @@ export default function CreateEventScreen() {
           />
         </ThemedView>
       </KeyboardAvoidingView>
+      {locationPickerOpen ? <EventLocationPicker
+        location={selectedLocation}
+        onClose={() => setLocationPickerOpen(false)}
+        onSelect={(location) => {
+          if (location.lat !== selectedLocation?.lat || location.lng !== selectedLocation?.lng) setLocationNote("");
+          setSelectedLocation(location);
+          setLocationPickerOpen(false);
+        }}
+      /> : null}
     </SafeAreaView>
   );
 }
@@ -1561,8 +1585,8 @@ function buildDraftUpdateRequest({
   doc,
   startAt,
   endAt,
-  locationName,
-  locationAddress,
+  selectedLocation,
+  locationNote,
   capacityText,
   requiresApproval,
   tagText,
@@ -1571,8 +1595,8 @@ function buildDraftUpdateRequest({
   doc: EventContentDoc;
   startAt: Date | null;
   endAt: Date | null;
-  locationName: string;
-  locationAddress: string;
+  selectedLocation: MapLocation | null;
+  locationNote: string;
   capacityText: string;
   requiresApproval: boolean;
   tagText: string;
@@ -1586,8 +1610,7 @@ function buildDraftUpdateRequest({
     content: normalizeContentDoc(doc),
     start_at: dateToRfc3339(startAt),
     end_at: dateToRfc3339(endAt),
-    location_name: emptyToNull(locationName),
-    location_address: emptyToNull(locationAddress),
+    ...eventLocationFields(selectedLocation, locationNote),
     capacity: parseCapacity(capacityText),
     requires_approval: requiresApproval,
     tags: parseTags(tagText),
@@ -1638,8 +1661,7 @@ function eventToDraftUpdateRequest(
     content: doc,
     start_at: dateToRfc3339(dateFromRfc3339(event.start_at)),
     end_at: dateToRfc3339(dateFromRfc3339(event.end_at)),
-    location_name: event.location_name,
-    location_address: event.location_address,
+    ...eventLocationFields(locationFromEvent(event), event.location_note ?? ""),
     capacity: event.capacity,
     requires_approval: event.requires_approval,
     tags: event.tags,
@@ -1861,11 +1883,6 @@ function pad2(value: number): string {
 
 function tabForValidationError(message: string): CreateEventTab {
   return message.includes("正文") || message.includes("图片") ? "content" : "meta";
-}
-
-function emptyToNull(value: string): string | null {
-  const text = value.trim();
-  return text ? text : null;
 }
 
 function parseCapacity(value: string): number | null {

@@ -3,6 +3,8 @@ import { useLocalSearchParams, router } from "expo-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
+  Linking,
+  Alert,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -22,6 +24,7 @@ import { IconSymbol } from "@/components/ui/icon-symbol";
 import { hasAccessToken } from "@/lib/api-client";
 import type { EventParticipationStateResp, EventResp } from "@/lib/dto";
 import { getEvent, getEventParticipation, joinEvent } from "@/lib/event-api";
+import { locationFromEvent, mapNavigationUrl } from "@/lib/event-location";
 import { getMediaDownloadUrl } from "@/lib/media-api";
 
 type EventMetaItem = {
@@ -294,6 +297,16 @@ export default function EventDetailScreen() {
                 <ThemedText style={styles.infoText}>
                   {event.location_address}
                 </ThemedText>
+                {event.location_note ? <ThemedText style={styles.infoText}>{event.location_note}</ThemedText> : null}
+                {locationFromEvent(event) ? <Pressable accessibilityRole="button" onPress={() => {
+                  const location = locationFromEvent(event);
+                  if (!location) return;
+                  console.info("[event-detail] opening map navigation", { eventId: event.event_id });
+                  void Linking.openURL(mapNavigationUrl(location)).catch(() => {
+                    console.warn("[event-detail] map navigation failed", { eventId: event.event_id });
+                    Alert.alert("无法打开地图", "请稍后重试");
+                  });
+                }}><ThemedText style={{ color: "#176bff" }}>打开地图导航</ThemedText></Pressable> : null}
               </View>
             ) : null}
 

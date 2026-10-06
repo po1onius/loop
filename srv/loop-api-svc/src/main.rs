@@ -137,6 +137,7 @@ async fn run() -> anyhow::Result<()> {
                 .context("failed to parse jwt private key")?,
         ),
         event_search,
+        maps: Arc::new(http::api::maps::MapService::from_env()?),
     };
 
     let app = build_app(state);

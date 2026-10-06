@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+  <title>选择活动地点</title>
+  <style>
+    *{box-sizing:border-box}html,body{margin:0;height:100%;font:15px system-ui,sans-serif;color:#172033;background:#fff}
+    body{display:flex;flex-direction:column}button,input{font:inherit}button{cursor:pointer;border:0;border-radius:10px;padding:12px;background:#edf2fa;color:#172033}button:disabled{opacity:.45;cursor:default}
+    form{display:flex;gap:8px;padding:10px}input{min-width:0;border:1px solid #cbd5e1;border-radius:10px;padding:10px}#query{flex:1}#city{width:85px}
+    #map-wrap{position:relative;flex:1;min-height:180px}#map{height:100%;width:100%}#locate{position:absolute;right:12px;bottom:30px;z-index:10;background:#fff;box-shadow:0 2px 8px #0002}
+    #pin{position:absolute;left:50%;top:50%;transform:translate(-50%,-100%);pointer-events:none;z-index:10;color:#176bff;font-size:32px;text-shadow:0 1px 2px #fff}
+    #status{margin:0;padding:8px 12px;font-size:13px;color:#59677d;min-height:34px}#results{max-height:25vh;overflow:auto;border-top:1px solid #e2e8f0}#results button{display:block;width:100%;text-align:left;border-radius:0;border-bottom:1px solid #edf2f7;background:#fff}#results small{display:block;color:#64748b;margin-top:5px}
+    footer{padding:12px;padding-bottom:max(12px,env(safe-area-inset-bottom));border-top:1px solid #e2e8f0}#name{font-weight:600}#address{color:#64748b;font-size:13px;margin:6px 0 10px}#confirm{background:#176bff;color:white;width:100%}
+  </style>
+</head>
+<body data-amap-key="__AMAP_JS_KEY__">
+  <form id="search"><input id="city" aria-label="搜索城市" placeholder="城市" maxlength="40"><input id="query" aria-label="搜索地点" placeholder="搜索店名、场馆或地址" maxlength="100"><button id="search-button" disabled>搜索</button></form>
+  <div id="map-wrap"><div id="map"></div><div id="pin" aria-hidden="true">📍</div><button id="locate" disabled>定位到我这里</button></div>
+  <p id="status" role="status" aria-live="polite">正在加载地图…</p>
+  <div id="results" aria-label="搜索结果与附近地点"></div>
+  <footer><div id="name">请选择活动地点</div><div id="address">搜索地点，或拖动地图选择位置</div><button id="confirm" disabled>确认地点</button></footer>
+  <script src="./picker.js"></script>
+</body>
+</html>

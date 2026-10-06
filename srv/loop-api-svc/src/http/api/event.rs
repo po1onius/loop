@@ -90,6 +90,12 @@ struct NormalizedEventDraft {
     end_at: Option<DateTime<Utc>>,
     location_name: Option<String>,
     location_address: Option<String>,
+    location_latitude: Option<f64>,
+    location_longitude: Option<f64>,
+    location_provider: Option<String>,
+    location_coordinate_system: Option<String>,
+    location_poi_id: Option<String>,
+    location_note: Option<String>,
     capacity: Option<i32>,
     requires_approval: bool,
 }
@@ -103,6 +109,12 @@ struct RawEventPayload {
     end_at: Option<String>,
     location_name: Option<String>,
     location_address: Option<String>,
+    location_latitude: Option<f64>,
+    location_longitude: Option<f64>,
+    location_provider: Option<String>,
+    location_coordinate_system: Option<String>,
+    location_poi_id: Option<String>,
+    location_note: Option<String>,
     capacity: Option<i32>,
     requires_approval: bool,
     tags: Vec<String>,
@@ -786,6 +798,12 @@ fn to_event_resp(event: Event) -> Result<EventResp, HttpErr> {
         end_at: event.end_at.map(|value| value.to_rfc3339()),
         location_name: event.location_name,
         location_address: event.location_address,
+        location_latitude: event.location_latitude,
+        location_longitude: event.location_longitude,
+        location_provider: event.location_provider,
+        location_coordinate_system: event.location_coordinate_system,
+        location_poi_id: event.location_poi_id,
+        location_note: event.location_note,
         capacity: event.capacity,
         requires_approval: event.requires_approval,
         tags: event.tags,
@@ -823,6 +841,12 @@ async fn insert_event_with_conn(
         end_at: draft.end_at,
         location_name: draft.location_name,
         location_address: draft.location_address,
+        location_latitude: draft.location_latitude,
+        location_longitude: draft.location_longitude,
+        location_provider: draft.location_provider,
+        location_coordinate_system: draft.location_coordinate_system,
+        location_poi_id: draft.location_poi_id,
+        location_note: draft.location_note,
         capacity: draft.capacity,
         requires_approval: draft.requires_approval,
         tags: draft.tags,
@@ -861,6 +885,12 @@ fn normalize_publish_payload(req: CreateEventRequest) -> Result<NormalizedEventD
         end_at: req.end_at,
         location_name: req.location_name,
         location_address: req.location_address,
+        location_latitude: req.location_latitude,
+        location_longitude: req.location_longitude,
+        location_provider: req.location_provider,
+        location_coordinate_system: req.location_coordinate_system,
+        location_poi_id: req.location_poi_id,
+        location_note: req.location_note,
         capacity: req.capacity,
         requires_approval: req.requires_approval,
         tags: req.tags,
@@ -878,6 +908,12 @@ fn normalize_draft_update_payload(
         end_at: req.end_at,
         location_name: req.location_name,
         location_address: req.location_address,
+        location_latitude: req.location_latitude,
+        location_longitude: req.location_longitude,
+        location_provider: req.location_provider,
+        location_coordinate_system: req.location_coordinate_system,
+        location_poi_id: req.location_poi_id,
+        location_note: req.location_note,
         capacity: req.capacity,
         requires_approval: req.requires_approval,
         tags: req.tags,
@@ -895,6 +931,12 @@ fn normalize_draft_create_payload(
         end_at: req.end_at,
         location_name: req.location_name,
         location_address: req.location_address,
+        location_latitude: req.location_latitude,
+        location_longitude: req.location_longitude,
+        location_provider: req.location_provider,
+        location_coordinate_system: req.location_coordinate_system,
+        location_poi_id: req.location_poi_id,
+        location_note: req.location_note,
         capacity: req.capacity,
         requires_approval: req.requires_approval,
         tags: req.tags.unwrap_or_default(),
@@ -910,6 +952,12 @@ fn normalize_full_payload(raw: RawEventPayload) -> Result<NormalizedEventDraft, 
         end_at,
         location_name,
         location_address,
+        location_latitude,
+        location_longitude,
+        location_provider,
+        location_coordinate_system,
+        location_poi_id,
+        location_note,
         capacity,
         requires_approval,
         tags,
@@ -928,7 +976,7 @@ fn normalize_full_payload(raw: RawEventPayload) -> Result<NormalizedEventDraft, 
     let end_at = parse_optional_time(end_at.as_deref())?;
     validate_time_range(start_at, end_at)?;
 
-    Ok(NormalizedEventDraft {
+    let draft = NormalizedEventDraft {
         asset_ids: collect_image_asset_ids(&content),
         content,
         content_stats,
@@ -938,9 +986,52 @@ fn normalize_full_payload(raw: RawEventPayload) -> Result<NormalizedEventDraft, 
         end_at,
         location_name: normalize_optional_text(location_name, 80)?,
         location_address: normalize_optional_text(location_address, 200)?,
+        location_latitude,
+        location_longitude,
+        location_provider: normalize_optional_text(location_provider, 80)?,
+        location_coordinate_system: normalize_optional_text(location_coordinate_system, 80)?,
+        location_poi_id: normalize_optional_text(location_poi_id, 80)?,
+        location_note: normalize_optional_text(location_note, 200)?,
         capacity: validate_capacity(capacity)?,
         requires_approval,
-    })
+    };
+    validate_location(&draft)?;
+    Ok(draft)
+}
+
+fn validate_location(draft: &NormalizedEventDraft) -> Result<(), HttpErr> {
+    let empty = draft.location_name.is_none()
+        && draft.location_address.is_none()
+        && draft.location_latitude.is_none()
+        && draft.location_longitude.is_none()
+        && draft.location_provider.is_none()
+        && draft.location_coordinate_system.is_none()
+        && draft.location_poi_id.is_none()
+        && draft.location_note.is_none();
+    let complete = draft.location_name.is_some()
+        && draft.location_address.is_some()
+        && draft
+            .location_latitude
+            .is_some_and(|v| v.is_finite() && (-90.0..=90.0).contains(&v))
+        && draft
+            .location_longitude
+            .is_some_and(|v| v.is_finite() && (-180.0..=180.0).contains(&v))
+        && draft.location_provider.as_deref() == Some("amap")
+        && draft.location_coordinate_system.as_deref() == Some("GCJ-02");
+    if !empty && !complete {
+        tracing::warn!(
+            event = "event.location.invalid",
+            "rejected incomplete or invalid map location"
+        );
+        return Err(HttpErr::client(StatusCode::BAD_REQUEST, INVALID_INPUT));
+    }
+    tracing::debug!(
+        event = "event.location.validated",
+        has_location = complete,
+        has_poi = draft.location_poi_id.is_some(),
+        "validated event map location"
+    );
+    Ok(())
 }
 
 fn to_draft_changes(draft: NormalizedEventDraft) -> Result<EventDraftChanges, HttpErr> {
@@ -954,6 +1045,12 @@ fn to_draft_changes(draft: NormalizedEventDraft) -> Result<EventDraftChanges, Ht
         end_at: draft.end_at,
         location_name: draft.location_name,
         location_address: draft.location_address,
+        location_latitude: draft.location_latitude,
+        location_longitude: draft.location_longitude,
+        location_provider: draft.location_provider,
+        location_coordinate_system: draft.location_coordinate_system,
+        location_poi_id: draft.location_poi_id,
+        location_note: draft.location_note,
         capacity: draft.capacity,
         requires_approval: draft.requires_approval,
         tags: draft.tags,
@@ -978,6 +1075,12 @@ fn build_publish_changes(event: Event) -> Result<PublishEventDraftChanges, HttpE
         end_at,
         location_name: event.location_name,
         location_address: event.location_address,
+        location_latitude: event.location_latitude,
+        location_longitude: event.location_longitude,
+        location_provider: event.location_provider,
+        location_coordinate_system: event.location_coordinate_system,
+        location_poi_id: event.location_poi_id,
+        location_note: event.location_note,
         capacity: validate_capacity(event.capacity)?,
         requires_approval: event.requires_approval,
         tags: normalize_tags(event.tags)?,
@@ -1554,7 +1657,13 @@ mod tests {
             start_at: None,
             end_at: None,
             location_name: Some("  场地  ".to_string()),
-            location_address: None,
+            location_address: Some("地址".to_string()),
+            location_latitude: Some(39.9),
+            location_longitude: Some(116.4),
+            location_provider: Some("amap".to_string()),
+            location_coordinate_system: Some("GCJ-02".to_string()),
+            location_poi_id: None,
+            location_note: None,
             capacity: Some(20),
             requires_approval: true,
             tags: vec![

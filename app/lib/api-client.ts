@@ -1,4 +1,5 @@
 const API_BASE_URL = normalizeBaseUrl(process.env.EXPO_PUBLIC_API_BASE_URL);
+export function getApiBaseUrl(): string | null { return API_BASE_URL; }
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 const MAX_ACCESS_TOKEN_REFRESH_LEEWAY_MS = 60_000;
 const REFRESH_RETRY_DELAY_MS = 15_000;

@@ -26,6 +26,18 @@ spec:
             - configMapRef:
                 name: loop-env
           env:
+            - name: LOOP_AMAP_JS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: loop-secrets
+                  key: LOOP_AMAP_JS_KEY
+                  optional: true
+            - name: LOOP_AMAP_SECURITY_CODE
+              valueFrom:
+                secretKeyRef:
+                  name: loop-secrets
+                  key: LOOP_AMAP_SECURITY_CODE
+                  optional: true
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:

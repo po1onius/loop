@@ -3,7 +3,7 @@ pub mod middleware;
 mod util;
 
 use crate::http::{
-    api::{community, conversation, event, media, push, user},
+    api::{community, conversation, event, maps, media, push, user},
     middleware::{ApiRule, RouteAccess},
 };
 use axum::{Router, routing::MethodRouter};
@@ -31,6 +31,7 @@ pub struct AppState {
     pub jwt_enc: Arc<EncodingKey>,
     pub jwt_dec: Arc<DecodingKey>,
     pub event_search: Arc<EventSearchService>,
+    pub maps: Arc<maps::MapService>,
 }
 
 #[derive(Clone)]
@@ -173,6 +174,7 @@ pub fn route(state: AppState) -> AppRoutes {
             .merge(conversation::route(state.clone()))
             .merge(push::route(state.clone()))
             .merge(event::route(state.clone()))
+            .merge(maps::route(state.clone()))
             .merge(media::route(state)),
     )
 }
