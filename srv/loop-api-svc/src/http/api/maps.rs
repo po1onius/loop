@@ -1,11 +1,14 @@
 use crate::http::{AppRoutes, AppState};
 use anyhow::{Context, bail};
 use axum::{
+    Json,
     extract::{Path, Query, State},
     http::{Method, StatusCode, header},
     response::{Html, IntoResponse, Response},
-    routing::get,
+    routing::{get, post},
 };
+use loop_dto::{ConvertCoordinatesRequest, ConvertCoordinatesResp};
+use serde::Deserialize;
 use std::{
     collections::HashMap,
     time::{Duration, Instant},
@@ -15,6 +18,7 @@ use std::{
 pub struct MapService {
     key: String,
     security_code: String,
+    web_service_key: String,
     client: amap_http::Client,
 }
 
@@ -28,11 +32,18 @@ impl MapService {
             .unwrap_or_default()
             .trim()
             .to_owned();
+        let web_service_key = std::env::var("LOOP_AMAP_WEB_SERVICE_KEY")
+            .unwrap_or_default()
+            .trim()
+            .to_owned();
         if key.is_empty() != security_code.is_empty() {
             bail!("LOOP_AMAP_JS_KEY and LOOP_AMAP_SECURITY_CODE must be configured together");
         }
         if !key.bytes().all(|b| b.is_ascii_alphanumeric()) {
             bail!("LOOP_AMAP_JS_KEY must be alphanumeric");
+        }
+        if !web_service_key.bytes().all(|b| b.is_ascii_alphanumeric()) {
+            bail!("LOOP_AMAP_WEB_SERVICE_KEY must be alphanumeric");
         }
         let client = amap_http::Client::builder()
             .connect_timeout(Duration::from_secs(5))
@@ -43,11 +54,13 @@ impl MapService {
         tracing::info!(
             event = "maps.configured",
             enabled = !key.is_empty(),
-            "initialized map picker"
+            coordinate_conversion_enabled = !web_service_key.is_empty(),
+            "initialized map services"
         );
         Ok(Self {
             key,
             security_code,
+            web_service_key,
             client,
         })
     }
@@ -57,8 +70,139 @@ pub fn route(state: AppState) -> AppRoutes {
     AppRoutes::new()
         .public(Method::GET, "/maps/picker", get(picker))
         .public(Method::GET, "/maps/picker.js", get(picker_script))
+        .public(
+            Method::POST,
+            "/maps/coordinates/convert",
+            post(convert_coordinates),
+        )
         .public(Method::GET, "/maps/_AMapService/{*path}", get(proxy))
         .with_state(state)
+}
+
+#[derive(Deserialize)]
+struct AMapConversion {
+    status: String,
+    infocode: Option<String>,
+    locations: Option<String>,
+}
+
+// POST keeps user coordinates out of access-log URLs. Neither request nor upstream
+// response/error bodies may be logged: they can contain coordinates and credentials.
+#[tracing::instrument(name = "maps.convert", skip_all)]
+async fn convert_coordinates(
+    State(state): State<AppState>,
+    Json(point): Json<ConvertCoordinatesRequest>,
+) -> Result<impl IntoResponse, (StatusCode, &'static str)> {
+    if !valid_coordinates(point.latitude, point.longitude) {
+        tracing::warn!(
+            event = "maps.convert.invalid_coordinates",
+            "invalid coordinate range"
+        );
+        return Err((StatusCode::BAD_REQUEST, "定位坐标无效"));
+    }
+    if state.maps.web_service_key.is_empty() {
+        tracing::warn!(
+            event = "maps.convert.unconfigured",
+            "Web service key is missing"
+        );
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "距离服务尚未配置，请稍后重试",
+        ));
+    }
+    let started = Instant::now();
+    let locations = format!("{},{}", point.longitude, point.latitude);
+    let mut response = state
+        .maps
+        .client
+        .get("https://restapi.amap.com/v3/assistant/coordinate/convert")
+        .query(&[
+            ("key", state.maps.web_service_key.as_str()),
+            ("locations", locations.as_str()),
+            ("coordsys", "gps"),
+            ("output", "JSON"),
+        ])
+        .send()
+        .await
+        .map_err(|error| {
+            tracing::warn!(
+                event = "maps.convert.failed",
+                timeout = error.is_timeout(),
+                connect = error.is_connect(),
+                elapsed_ms = started.elapsed().as_millis() as u64,
+                "coordinate conversion request failed"
+            );
+            (StatusCode::BAD_GATEWAY, "距离计算暂不可用，请重试")
+        })?;
+    if !response.status().is_success() {
+        tracing::warn!(
+            event = "maps.convert.http_error",
+            status = response.status().as_u16(),
+            "coordinate conversion returned HTTP error"
+        );
+        return Err((StatusCode::BAD_GATEWAY, "距离计算暂不可用，请重试"));
+    }
+    let mut body = Vec::new();
+    loop {
+        match response.chunk().await {
+            Ok(Some(chunk)) if body.len() + chunk.len() <= 4096 => body.extend_from_slice(&chunk),
+            Ok(None) => break,
+            _ => {
+                tracing::warn!(
+                    event = "maps.convert.body_failed",
+                    "conversion response incomplete or too large"
+                );
+                return Err((StatusCode::BAD_GATEWAY, "距离计算暂不可用，请重试"));
+            }
+        }
+    }
+    let result: AMapConversion = serde_json::from_slice(&body).map_err(|_| {
+        tracing::warn!(
+            event = "maps.convert.invalid_response",
+            "invalid conversion JSON"
+        );
+        (StatusCode::BAD_GATEWAY, "距离计算暂不可用，请重试")
+    })?;
+    if result.status != "1" {
+        tracing::warn!(
+            event = "maps.convert.rejected",
+            infocode = result.infocode.and_then(|code| code.parse::<u32>().ok()),
+            "AMap rejected conversion"
+        );
+        return Err((StatusCode::BAD_GATEWAY, "距离计算暂不可用，请重试"));
+    }
+    let point = result
+        .locations
+        .as_deref()
+        .and_then(|value| value.split_once(','))
+        .and_then(|(lng, lat)| Some((lat.parse::<f64>().ok()?, lng.parse::<f64>().ok()?)))
+        .filter(|&(lat, lng)| valid_coordinates(lat, lng))
+        .ok_or_else(|| {
+            tracing::warn!(
+                event = "maps.convert.invalid_result",
+                "invalid converted coordinates"
+            );
+            (StatusCode::BAD_GATEWAY, "距离计算暂不可用，请重试")
+        })?;
+    tracing::info!(
+        event = "maps.convert.completed",
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "coordinate conversion completed"
+    );
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(ConvertCoordinatesResp {
+            latitude: point.0,
+            longitude: point.1,
+        }),
+    ))
+}
+
+fn valid_coordinates(latitude: f64, longitude: f64) -> bool {
+    latitude.is_finite()
+        && longitude.is_finite()
+        && (-90.0..=90.0).contains(&latitude)
+        && (-180.0..=180.0).contains(&longitude)
 }
 
 async fn picker(State(state): State<AppState>) -> Response {

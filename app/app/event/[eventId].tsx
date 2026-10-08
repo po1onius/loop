@@ -24,7 +24,9 @@ import { IconSymbol } from "@/components/ui/icon-symbol";
 import { hasAccessToken } from "@/lib/api-client";
 import type { EventParticipationStateResp, EventResp } from "@/lib/dto";
 import { getEvent, getEventParticipation, joinEvent } from "@/lib/event-api";
-import { locationFromEvent, mapNavigationUrl } from "@/lib/event-location";
+import { formatEventDistance, locationFromEvent, mapNavigationUrl } from "@/lib/event-location";
+import { LocationDistanceControl } from "@/components/location-distance-control";
+import { useUserLocation } from "@/hooks/use-user-location";
 import { getMediaDownloadUrl } from "@/lib/media-api";
 
 type EventMetaItem = {
@@ -46,6 +48,8 @@ export default function EventDetailScreen() {
   const params = useLocalSearchParams<{ eventId?: string | string[] }>();
   const eventId = normalizeRouteParam(params.eventId);
   const [event, setEvent] = useState<EventResp | null>(null);
+  const userLocation = useUserLocation(Boolean(event && locationFromEvent(event)));
+  const distance = event ? formatEventDistance(event, userLocation.position, true) : null;
   const [loadingEvent, setLoadingEvent] = useState(false);
   const [eventError, setEventError] = useState("");
   const [participationState, setParticipationState] =
@@ -297,6 +301,8 @@ export default function EventDetailScreen() {
                 <ThemedText style={styles.infoText}>
                   {event.location_address}
                 </ThemedText>
+                {distance ? <ThemedText type="link">{distance}</ThemedText> : null}
+                {locationFromEvent(event) ? <LocationDistanceControl state={userLocation} /> : null}
                 {event.location_note ? <ThemedText style={styles.infoText}>{event.location_note}</ThemedText> : null}
                 {locationFromEvent(event) ? <Pressable accessibilityRole="button" onPress={() => {
                   const location = locationFromEvent(event);

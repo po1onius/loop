@@ -1,4 +1,17 @@
 import type { EventResp, UpdateEventDraftRequest } from "@/lib/dto";
+import { getDistance } from "geolib";
+import { LOCATION_MAX_AGE_MS, type UserLocation } from "@/lib/user-location";
+
+export function formatEventDistance(event: EventResp, user: UserLocation | null, detail = false): string | null {
+  const location = locationFromEvent(event);
+  if (!location || !user || Date.now() - user.capturedAt >= LOCATION_MAX_AGE_MS) return null;
+  const meters = getDistance(user, { latitude: location.lat, longitude: location.lng });
+  const prefix = detail ? "距你直线" : "距你";
+  if (meters < 100) return `${prefix}不足 100 米`;
+  // Round at a useful display precision, including the metre/kilometre boundary.
+  const rounded = Math.round(meters / 100) * 100;
+  return rounded < 1000 ? `${prefix}约 ${rounded} 米` : `${prefix}约 ${(rounded / 1000).toFixed(1)} 公里`;
+}
 
 export type MapLocation = {
   name: string;

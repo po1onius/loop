@@ -18,6 +18,9 @@ import { Colors } from "@/constants/theme";
 import { useColorScheme } from "@/hooks/use-color-scheme";
 import type { EventResp, EventSearchFacetResp } from "@/lib/dto";
 import { searchEvents } from "@/lib/event-api";
+import { LocationDistanceControl } from "@/components/location-distance-control";
+import { useUserLocation } from "@/hooks/use-user-location";
+import { formatEventDistance } from "@/lib/event-location";
 
 type TimePreset = "all" | "today" | "next_7_days" | "next_30_days";
 
@@ -31,6 +34,7 @@ const TIME_PRESETS: { label: string; value: TimePreset }[] = [
 ];
 
 export default function SearchEventsScreen() {
+  const userLocation = useUserLocation();
   const colorScheme = useColorScheme() === "dark" ? "dark" : "light";
   const latestRequestIdRef = useRef(0);
   const [query, setQuery] = useState("");
@@ -190,6 +194,9 @@ export default function SearchEventsScreen() {
           <View style={styles.headerSpacer} />
         </View>
 
+        <View style={{ paddingHorizontal: 16 }}>
+          <LocationDistanceControl state={userLocation} />
+        </View>
         <View
           style={[
             styles.searchBox,
@@ -221,6 +228,7 @@ export default function SearchEventsScreen() {
         </View>
 
         <FlatList
+          extraData={userLocation.position}
           data={events}
           keyExtractor={(item) => item.event_id}
           keyboardShouldPersistTaps="handled"
@@ -345,6 +353,9 @@ export default function SearchEventsScreen() {
                 <ThemedText numberOfLines={2} style={styles.resultSummary}>
                   {formatEventDescription(item)}
                 </ThemedText>
+                {formatEventDistance(item, userLocation.position) ? (
+                  <ThemedText type="link">{formatEventDistance(item, userLocation.position)}</ThemedText>
+                ) : null}
                 {item.tags.length ? (
                   <ThemedText numberOfLines={1} style={styles.resultTags}>
                     {item.tags.map((tag) => `#${tag}`).join("  ")}

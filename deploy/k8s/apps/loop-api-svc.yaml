@@ -38,6 +38,12 @@ spec:
                   name: loop-secrets
                   key: LOOP_AMAP_SECURITY_CODE
                   optional: true
+            - name: LOOP_AMAP_WEB_SERVICE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: loop-secrets
+                  key: LOOP_AMAP_WEB_SERVICE_KEY
+                  optional: true
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:

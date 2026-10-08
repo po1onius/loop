@@ -10,7 +10,7 @@ module.exports = {
     infoPlist: {
       ...expo.ios.infoPlist,
       UIBackgroundModes: ['remote-notification'],
-      NSLocationWhenInUseUsageDescription: '允许 Loop 获取当前位置，帮助你选择活动地点。',
+      NSLocationWhenInUseUsageDescription: '允许 Loop 获取当前位置，显示活动距你的距离并帮助你选择活动地点。',
     },
   },
   android: {

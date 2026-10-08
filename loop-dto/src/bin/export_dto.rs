@@ -3,10 +3,11 @@ use std::{fs, io, path::PathBuf};
 use loop_dto::{
     CommunityPostReactionResp, CommunityPostResp, CommunityPostType, CommunitySectionResp,
     CompleteMediaUploadResp, ConversationCapabilitiesResp, ConversationKind,
-    ConversationMemberResp, ConversationMessageResp, ConversationResp, CreateCommunityPostRequest,
-    CreateEventDraftRequest, CreateEventRequest, CreateMediaUploadRequest, CreateMediaUploadResp,
-    CurrentUserResp, EventContentBlock, EventContentDoc, EventContentImage, EventFeatureBlock,
-    EventInlineNode, EventJoinRequestResp, EventJoinReviewDecision, EventParticipationResp,
+    ConversationMemberResp, ConversationMessageResp, ConversationResp, ConvertCoordinatesRequest,
+    ConvertCoordinatesResp, CreateCommunityPostRequest, CreateEventDraftRequest,
+    CreateEventRequest, CreateMediaUploadRequest, CreateMediaUploadResp, CurrentUserResp,
+    EventContentBlock, EventContentDoc, EventContentImage, EventFeatureBlock, EventInlineNode,
+    EventJoinRequestResp, EventJoinReviewDecision, EventParticipationResp,
     EventParticipationStateResp, EventParticipationStatus, EventResp, EventSearchFacetResp,
     EventStatus, EventTextColor, EventTextMark, ListCommunityPostsResp,
     ListConversationMessagesResp, ListConversationsResp, ListEventJoinRequestsResp, ListEventsResp,
@@ -27,6 +28,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let cfg = Config::new().with_out_dir(export_dir);
     let mut declarations = Vec::new();
+
+    append::<ConvertCoordinatesRequest>(&cfg, &mut declarations)?;
+    append::<ConvertCoordinatesResp>(&cfg, &mut declarations)?;
 
     append::<CreateEventRequest>(&cfg, &mut declarations)?;
     append::<CreateEventDraftRequest>(&cfg, &mut declarations)?;

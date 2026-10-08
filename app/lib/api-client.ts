@@ -390,6 +390,7 @@ export type RequestJsonOptions<TReq> = {
   body?: TReq;
   headers?: Record<string, string>;
   auth?: boolean;
+  signal?: AbortSignal;
 };
 
 export async function requestJson<TReq, TResp>(
@@ -438,6 +439,7 @@ async function requestJsonAttempt<TReq, TResp>(
       method,
       headers,
     };
+    if (options.signal) init.signal = options.signal;
     if (body !== undefined) {
       init.body = JSON.stringify(body, (_key, value) =>
         typeof value === "bigint" ? value.toString() : value,

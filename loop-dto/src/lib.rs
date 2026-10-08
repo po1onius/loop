@@ -3,6 +3,22 @@ use ts_rs::TS;
 
 pub const EVENT_CONTENT_VERSION_V1: i32 = 1;
 
+#[derive(Serialize, Deserialize, TS)]
+#[ts(export_to = "dto.ts")]
+pub struct ConvertCoordinatesRequest {
+    // Device GPS coordinates (WGS-84), never persisted.
+    pub latitude: f64,
+    pub longitude: f64,
+}
+
+#[derive(Serialize, Deserialize, TS)]
+#[ts(export_to = "dto.ts")]
+pub struct ConvertCoordinatesResp {
+    // AMap coordinates (GCJ-02).
+    pub latitude: f64,
+    pub longitude: f64,
+}
+
 #[derive(Debug, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export_to = "dto.ts")]

@@ -18,6 +18,10 @@ import { ThemedView } from "@/components/themed-view";
 import { IconSymbol } from "@/components/ui/icon-symbol";
 import type { EventResp } from "@/lib/dto";
 import { listEvents } from "@/lib/event-api";
+import { LocationDistanceControl } from "@/components/location-distance-control";
+import { useUserLocation } from "@/hooks/use-user-location";
+import { formatEventDistance } from "@/lib/event-location";
+import { refreshUserLocation } from "@/lib/user-location";
 
 type CarouselItem = {
   id: string;
@@ -28,6 +32,7 @@ type CarouselItem = {
 
 type ListItem = {
   description: string;
+  distance?: string | null;
   eventId?: string;
   id: string;
   title: string;
@@ -85,6 +90,7 @@ const FALLBACK_ITEMS: ListItem[] = [
 ];
 
 export default function HomeScreen() {
+  const userLocation = useUserLocation();
   const { width } = useWindowDimensions();
   const carouselRef = useRef<FlatList<CarouselItem>>(null);
   const latestEventsRequestIdRef = useRef(0);
@@ -158,6 +164,7 @@ export default function HomeScreen() {
 
   const handleRefreshEvents = useCallback(() => {
     void loadEvents("refresh");
+    void refreshUserLocation({ force: true });
   }, [loadEvents]);
 
   useEffect(() => {
@@ -180,11 +187,12 @@ export default function HomeScreen() {
     }
     return events.map((event) => ({
       description: formatEventDescription(event),
+      distance: formatEventDistance(event, userLocation.position),
       eventId: event.event_id,
       id: event.event_id,
       title: event.title,
     }));
-  }, [events]);
+  }, [events, userLocation.position]);
 
   const handleCarouselScrollEnd = (
     event: NativeSyntheticEvent<NativeScrollEvent>,
@@ -280,6 +288,7 @@ export default function HomeScreen() {
               <ThemedText style={styles.createButtonText}>发布</ThemedText>
             </Pressable>
           </View>
+          <LocationDistanceControl state={userLocation} />
           <FlatList
             data={listItems}
             keyExtractor={(item) => item.id}
@@ -316,6 +325,7 @@ export default function HomeScreen() {
                     <IconSymbol size={18} name="chevron.right" color="#8A94A6" />
                   </View>
                   <ThemedText numberOfLines={2}>{item.description}</ThemedText>
+                  {item.distance ? <ThemedText type="link">{item.distance}</ThemedText> : null}
                 </ThemedView>
               </Pressable>
             )}
