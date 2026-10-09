@@ -131,6 +131,10 @@ export default function RootLayout() {
           options={{ headerShown: false }}
         />
         <Stack.Screen
+          name="conversation/[conversationId]/manage"
+          options={{ headerShown: false, animation: "slide_from_right" }}
+        />
+        <Stack.Screen
           name="event/[eventId]/join-requests"
           options={{ headerShown: false }}
         />

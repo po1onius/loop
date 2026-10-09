@@ -16,13 +16,15 @@ export function CommunityPostCard({
   onInterestedPress,
   interestedBusy = false,
   compact = false,
+  expanded = false,
 }: {
   post: CommunityPostResp;
   onPress?: () => void;
-  onDiscussionPress: () => void;
+  onDiscussionPress?: () => void;
   onInterestedPress?: () => void;
   interestedBusy?: boolean;
   compact?: boolean;
+  expanded?: boolean;
 }) {
   const isDark = useColorScheme() === "dark";
   const body = (
@@ -57,12 +59,12 @@ export function CommunityPostCard({
         </View>
       </View>
 
-      <ThemedText type="subtitle" style={styles.title} numberOfLines={2}>
+      <ThemedText type="subtitle" style={styles.title} numberOfLines={expanded ? undefined : 2}>
         {post.title}
       </ThemedText>
       <ThemedText
         style={styles.body}
-        numberOfLines={compact ? 3 : 6}
+        numberOfLines={expanded ? undefined : compact ? 3 : 6}
       >
         {post.body}
       </ThemedText>
@@ -107,7 +109,7 @@ export function CommunityPostCard({
           </ThemedText>
         )}
 
-        <Pressable
+        {onDiscussionPress ? <Pressable
           accessibilityRole="button"
           onPress={onDiscussionPress}
           hitSlop={8}
@@ -119,7 +121,11 @@ export function CommunityPostCard({
           <ThemedText style={styles.discussionText}>
             {formatCount(post.discussion_count)} 条讨论  ›
           </ThemedText>
-        </Pressable>
+        </Pressable> : (
+          <ThemedText style={[styles.discussionButton, styles.discussionText]}>
+            {formatCount(post.discussion_count)} 条回复
+          </ThemedText>
+        )}
       </View>
     </ThemedView>
   );

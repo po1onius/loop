@@ -18,7 +18,6 @@ import { Colors } from "@/constants/theme";
 import { useColorScheme } from "@/hooks/use-color-scheme";
 import type { EventResp, EventSearchFacetResp } from "@/lib/dto";
 import { searchEvents } from "@/lib/event-api";
-import { LocationDistanceControl } from "@/components/location-distance-control";
 import { useUserLocation } from "@/hooks/use-user-location";
 import { formatEventDistance } from "@/lib/event-location";
 
@@ -194,9 +193,6 @@ export default function SearchEventsScreen() {
           <View style={styles.headerSpacer} />
         </View>
 
-        <View style={{ paddingHorizontal: 16 }}>
-          <LocationDistanceControl state={userLocation} />
-        </View>
         <View
           style={[
             styles.searchBox,

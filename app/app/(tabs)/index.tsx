@@ -18,7 +18,6 @@ import { ThemedView } from "@/components/themed-view";
 import { IconSymbol } from "@/components/ui/icon-symbol";
 import type { EventResp } from "@/lib/dto";
 import { listEvents } from "@/lib/event-api";
-import { LocationDistanceControl } from "@/components/location-distance-control";
 import { useUserLocation } from "@/hooks/use-user-location";
 import { formatEventDistance } from "@/lib/event-location";
 import { refreshUserLocation } from "@/lib/user-location";
@@ -288,7 +287,6 @@ export default function HomeScreen() {
               <ThemedText style={styles.createButtonText}>发布</ThemedText>
             </Pressable>
           </View>
-          <LocationDistanceControl state={userLocation} />
           <FlatList
             data={listItems}
             keyExtractor={(item) => item.id}

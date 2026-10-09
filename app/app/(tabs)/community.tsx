@@ -12,7 +12,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-import { CommunityPostCard } from "@/components/community-post-card";
+import { CommunityPostListItem } from "@/components/community-post-list-item";
 import { ThemedText } from "@/components/themed-text";
 import { ThemedView } from "@/components/themed-view";
 import { IconSymbol } from "@/components/ui/icon-symbol";
@@ -21,7 +21,6 @@ import { hasAccessToken } from "@/lib/api-client";
 import {
   listCommunityPosts,
   listCommunitySections,
-  setPostInterested,
   type CommunityPostSort,
 } from "@/lib/community-api";
 import type { CommunityPostResp, CommunitySectionResp } from "@/lib/dto";
@@ -43,7 +42,6 @@ export default function CommunityScreen() {
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [interestBusyIds, setInterestBusyIds] = useState<Set<string>>(new Set());
   const [error, setError] = useState("");
 
   const loadFeed = useCallback(
@@ -134,40 +132,6 @@ export default function CommunityScreen() {
     void loadFeed("initial", selectedSectionIdRef.current, nextSort);
   }, [loadFeed, sort]);
 
-  const toggleInterested = useCallback(async (post: CommunityPostResp) => {
-    if (interestBusyIds.has(post.post_id)) return;
-    const desired = !post.viewer_interested;
-    setInterestBusyIds((current) => new Set(current).add(post.post_id));
-    // 立即反馈点击结果，服务端响应会用事务后的权威计数覆盖；失败则回滚。
-    setPosts((current) => current.map((item) => item.post_id === post.post_id ? {
-      ...item,
-      viewer_interested: desired,
-      interest_count: item.interest_count + (desired ? 1n : -1n),
-    } : item));
-    try {
-      const result = await setPostInterested(post.post_id, desired);
-      setPosts((current) => current.map((item) => item.post_id === post.post_id ? {
-        ...item,
-        viewer_interested: result.interested,
-        interest_count: result.interest_count,
-      } : item));
-    } catch (reactionError) {
-      console.warn("[community] interested reaction failed", {
-        postId: post.post_id,
-        desired,
-        reason: reactionError instanceof Error ? reactionError.message : String(reactionError),
-      });
-      setPosts((current) => current.map((item) => item.post_id === post.post_id ? post : item));
-      setError(reactionError instanceof Error ? reactionError.message : "操作失败");
-    } finally {
-      setInterestBusyIds((current) => {
-        const next = new Set(current);
-        next.delete(post.post_id);
-        return next;
-      });
-    }
-  }, [interestBusyIds]);
-
   return (
     <SafeAreaView style={styles.safeArea} edges={["top", "left", "right"]}>
       <ThemedView style={styles.container}>
@@ -217,15 +181,12 @@ export default function CommunityScreen() {
             data={posts}
             keyExtractor={(item) => item.post_id}
             renderItem={({ item }) => (
-              <CommunityPostCard
+              <CommunityPostListItem
                 post={item}
-                interestedBusy={interestBusyIds.has(item.post_id)}
-                onInterestedPress={() => void toggleInterested(item)}
                 onPress={() => router.push(`/community/post/${encodeURIComponent(item.post_id)}` as never)}
-                onDiscussionPress={() => router.push(`/conversation/${encodeURIComponent(item.discussion_conversation_id)}` as never)}
               />
             )}
-            ItemSeparatorComponent={() => <View style={styles.separator} />}
+            ItemSeparatorComponent={() => <View style={styles.itemGap} />}
             contentContainerStyle={styles.listContent}
             refreshControl={<RefreshControl refreshing={refreshing} tintColor="#0A7EA4" onRefresh={() => void loadFeed("refresh")} />}
             onEndReached={() => void loadFeed("more")}
@@ -268,7 +229,7 @@ const styles = StyleSheet.create({
   sortText: { fontSize: 13, lineHeight: 18, opacity: 0.52 },
   sortTextSelected: { color: "#0A7EA4", opacity: 1, fontWeight: "700" },
   listContent: { paddingHorizontal: 12, paddingBottom: 28 },
-  separator: { height: 10 },
+  itemGap: { height: 15 },
   centerState: { padding: 36, alignItems: "center", gap: 10 },
   muted: { textAlign: "center", opacity: 0.62 },
   errorCard: { marginHorizontal: 16, marginBottom: 10, padding: 10, borderRadius: 9, backgroundColor: "#FFF0F0" },

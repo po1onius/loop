@@ -19,6 +19,7 @@ type IconSymbolName = keyof typeof MAPPING;
 const MAPPING = {
   calendar: "event",
   checkmark: "check",
+  ellipsis: "more-horiz",
   "chevron.left": "chevron-left",
   "house.fill": "home",
   "message.fill": "chat",

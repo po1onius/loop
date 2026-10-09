@@ -39,18 +39,24 @@ type PendingImage = { localUri: string; assetId: string };
 
 /**
  * 通用会话视图只依赖 Conversation/Message 协议，不理解帖子或活动业务。
- * headerContext 由路由层注入，因此后续活动群聊、私聊都能复用消息区和输入区。
+ * headerContext 固定在顶部，listHeaderContext 随消息列表滚动，均由路由层注入。
  */
 export function ConversationScreen({
   conversation,
   currentUserId,
   headerContext,
+  listHeaderContext,
+  initialScrollToEnd = true,
+  headerAction,
   onBack,
   onConversationChange,
 }: {
   conversation: ConversationResp;
   currentUserId: string;
   headerContext?: ReactNode;
+  listHeaderContext?: ReactNode;
+  initialScrollToEnd?: boolean;
+  headerAction?: ReactNode;
   onBack: () => void;
   onConversationChange?: (conversation: ConversationResp) => void;
 }) {
@@ -328,11 +334,12 @@ export function ConversationScreen({
             </Pressable>
             <View style={styles.headerTitle}>
               <ThemedText type="defaultSemiBold" numberOfLines={1}>{conversation.title}</ThemedText>
-              <ThemedText style={styles.headerMeta}>{conversation.message_count.toString()} 条消息</ThemedText>
+              <ThemedText style={styles.headerMeta}>{conversation.message_count.toString()} {conversation.kind === "post_thread" ? "条回复" : "条消息"}</ThemedText>
             </View>
             {conversation.kind === "post_thread" ? <Pressable accessibilityRole="button" disabled={subscriptionBusy} onPress={() => void toggleSubscription()} style={styles.subscribeButton}>
               {subscriptionBusy ? <ActivityIndicator size="small" color="#0A7EA4" /> : <ThemedText style={styles.subscribeText}>{subscribed ? "已加入" : "加入"}</ThemedText>}
             </Pressable> : null}
+            {headerAction}
           </View>
 
           {headerContext}
@@ -355,10 +362,15 @@ export function ConversationScreen({
                 />
               )}
               contentContainerStyle={styles.messageList}
-              ListHeaderComponent={nextBeforeSeq !== null ? <Pressable disabled={loadingOlder} onPress={() => void loadOlder()} style={styles.olderButton}>{loadingOlder ? <ActivityIndicator size="small" color="#0A7EA4" /> : <ThemedText style={styles.olderText}>加载更早消息</ThemedText>}</Pressable> : null}
-              ListEmptyComponent={<View style={styles.emptyState}><ThemedText type="defaultSemiBold">还没有人发言</ThemedText><ThemedText style={styles.muted}>发出第一条消息，开始交流</ThemedText></View>}
+              ListHeaderComponent={
+                <>
+                  {listHeaderContext}
+                  {nextBeforeSeq !== null ? <Pressable disabled={loadingOlder} onPress={() => void loadOlder()} style={styles.olderButton}>{loadingOlder ? <ActivityIndicator size="small" color="#0A7EA4" /> : <ThemedText style={styles.olderText}>加载更早消息</ThemedText>}</Pressable> : null}
+                </>
+              }
+              ListEmptyComponent={<View style={styles.emptyState}><ThemedText type="defaultSemiBold">{conversation.kind === "post_thread" ? "还没有回复" : "还没有人发言"}</ThemedText><ThemedText style={styles.muted}>{conversation.kind === "post_thread" ? "发出第一条回复，开始交流" : "发出第一条消息，开始交流"}</ThemedText></View>}
               onContentSizeChange={() => {
-                if (!initialScrollDoneRef.current && messages.length) {
+                if (initialScrollToEnd && !initialScrollDoneRef.current && messages.length) {
                   initialScrollDoneRef.current = true;
                   listRef.current?.scrollToEnd({ animated: false });
                 }
@@ -378,7 +390,7 @@ export function ConversationScreen({
               editable={conversation.capabilities.can_send && !sending}
               multiline
               maxLength={2_000}
-              placeholder={conversation.capabilities.can_send ? "发送消息…" : conversation.capabilities.read_only_reason ?? "当前会话只读"}
+              placeholder={conversation.capabilities.can_send ? (conversation.kind === "post_thread" ? "回复帖子…" : "发送消息…") : conversation.capabilities.read_only_reason ?? "当前会话只读"}
               placeholderTextColor="#8A94A6"
               style={[styles.messageInput, { color: inputColor, backgroundColor: isDark ? "#242C33" : "#F1F4F6" }]}
             />
